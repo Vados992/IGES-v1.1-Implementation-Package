@@ -86,8 +86,10 @@ docker compose exec -T api python -m app.verify_integrity
 For a bounded live source check without database writes:
 `python -m scripts.live_worldbank`. It saves raw bytes and a timestamped receipt
 under ignored `work/live-worldbank/`, and exits unsuccessfully on upstream failure.
-The manual GitHub Actions run additionally imports real data into its disposable
-database; ordinary PR checks use explicit test fixtures and no upstream dependency.
+The separate live-source CI job runs on pull requests and manual dispatch. It
+imports real data into its own fresh disposable database, checks the public API
+and retains a receipt artifact for 14 days. It fails visibly if World Bank is
+unavailable. Unit and PostgreSQL fixture tests have no upstream dependency.
 
 **Not completed:** third-party security audit, GDPR/DPIA review, confidential-source vault, independent external timestamp anchoring, full causal-inference engine, bank-data integration, universal entity resolution, provider-backed infrastructure, benchmarked RPO/RTO, independent public accusation publication, production runbooks and incident drills. Those are deliberate NO-GO gates, not assumed protections.
 
