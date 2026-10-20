@@ -80,7 +80,9 @@ def parse_snapshot(raw: bytes, url: str, country: str, indicator: str, start: in
             raise ValueError("invalid numeric value") from exc
         if value is not None and not value.is_finite():
             raise ValueError("non-finite numeric value")
-        if value is not None and value.adjusted() >= 28:\n            raise ValueError('source numeric value exceeds database precision')\n        status = row.get("obs_status")
+        if value is not None and value.adjusted() >= 28:
+            raise ValueError('source numeric value exceeds database precision')
+        status = row.get("obs_status")
         result.append(Observation(code, indicator, year, value, str(status) if status else None, f"$[1][{i}]"))
     if not result:
         raise ValueError("source response contained zero observations")
