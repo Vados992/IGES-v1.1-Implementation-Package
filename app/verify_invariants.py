@@ -13,11 +13,11 @@ def main():
         protections = session.execute(text("""
             SELECT relname, relrowsecurity, relforcerowsecurity
             FROM pg_class WHERE relname IN (
-              'projects','evidence','observations','financial_events','claims',
+              'projects','evidence','observations','public_awards','financial_events','claims',
               'reviews','audit_events','evidence_attestations')
             ORDER BY relname
         """)).all()
-        assert len(protections) == 8
+        assert len(protections) == 9
         assert all(row[1] and row[2] for row in protections)
         grants = session.execute(text("""
             SELECT has_table_privilege(current_user,'evidence','UPDATE'),
