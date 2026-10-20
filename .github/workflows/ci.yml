@@ -1,0 +1,117 @@
+name: IGES pilot validation
+on:
+  push:
+    branches: [main, "implementation/**", "fix/**"]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: iges-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      matrix:
+        python: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+      - run: python -m pip install -r requirements-dev.txt
+      - run: python -m compileall -q app tests scripts
+      - run: ruff check app tests scripts
+      - run: pytest -q -m 'not integration'
+  dependencies:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -r requirements-dev.txt
+      - run: pip-audit -r requirements.txt
+      - run: bandit -r app -f json -o work-bandit.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: application-static-security-scan
+          path: work-bandit.json
+  postgres-compose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -r requirements-dev.txt
+      - name: Prepare disposable credentials (including URL-reserved characters)
+        run: python scripts/ci_env.py
+      - name: Validate Compose and start fresh database and nonroot API
+        run: |
+          docker compose config --quiet
+          docker compose up --build --wait --wait-timeout 180
+      - name: PostgreSQL RLS, API, concurrency and audit integration
+        run: |
+          docker compose exec -T db sh -c 'psql -U postgres -d iges -c "CREATE DATABASE iges_restore"'
+          docker compose run --rm -v "$PWD/tests:/opt/iges/tests:ro" -v "$PWD/pyproject.toml:/opt/iges/pyproject.toml:ro" \
+            -e IGES_TEST_ADMIN_URL="$(cat work/ci-admin-url)" \
+            --user root api sh -c 'pip install --no-cache-dir --target /tmp/testdeps pytest==9.1.1 && PYTHONPATH=/tmp/testdeps:/opt/iges python -m pytest -q -p no:cacheprovider -m integration tests/test_postgres_integration.py'
+      - name: HTTP smoke and missing OIDC denial
+        run: python scripts/http_smoke.py
+      - name: Restart existing volume without repeating initialization
+        run: |
+          docker compose restart
+          docker compose up --wait --wait-timeout 120
+          python scripts/http_smoke.py
+          docker compose exec -T api python -m app.verify_integrity
+      - name: Backup and restore disposable database
+        run: |
+          docker compose exec -T db pg_dump -U postgres -d iges -Fc > work/iges.dump
+          docker compose exec -T db pg_restore -U postgres -d iges_restore --exit-on-error < work/iges.dump
+          docker compose exec -T db psql -U postgres -d iges_restore -v ON_ERROR_STOP=1 \
+            -c "SELECT version FROM schema_version" -c "SELECT count(*) FROM evidence"
+          docker compose run --rm -e IGES_DB_NAME=iges_restore api python -m app.verify_integrity
+      - name: Diagnostics
+        if: failure()
+        run: docker compose logs --tail 100
+      - name: Remove disposable services and test data
+        if: always()
+        run: docker compose down --volumes --remove-orphans
+  live-worldbank:
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -r requirements.txt
+      - name: Live official-source check (no fallback)
+        run: python -m scripts.live_worldbank
+      - name: Import real data into a separate fresh pilot database
+        run: |
+          python scripts/ci_env.py
+          docker compose up --build --wait --wait-timeout 180
+          docker compose run --rm api python -m app.seed_worldbank --country PRT --indicator SP.POP.TOTL --start 2022 --end 2024 | tee work/live-worldbank/database-import.json
+          docker compose exec -T api python -m app.verify_integrity | tee work/live-worldbank/database-integrity.json
+          python -m scripts.verify_live_api
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: worldbank-source-check
+          path: work/live-worldbank
+          retention-days: 14
+      - name: Diagnostics
+        if: failure()
+        run: docker compose logs --tail 100
+      - name: Remove disposable live-source database
+        if: always()
+        run: docker compose down --volumes --remove-orphans
