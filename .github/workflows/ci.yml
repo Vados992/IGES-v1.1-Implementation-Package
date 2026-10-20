@@ -39,6 +39,14 @@ jobs:
           done
           docker compose logs
           exit 1
+      - name: Fetch real World Bank records and verify provenance
+        timeout-minutes: 4
+        run: |
+          docker compose run --rm api python -m app.seed_worldbank \
+            --country PRT --indicator SP.POP.TOTL --start 2022 --end 2024
+          curl --fail --silent \
+            "http://127.0.0.1:8000/v1/public/observations?country=PRT&indicator=SP.POP.TOTL" \
+            | python -c 'import json,sys; d=json.load(sys.stdin); assert d["count"] >= 1; assert all(r["source_url"].startswith("https://api.worldbank.org/") and len(r["content_sha256"])==64 for r in d["records"]); print("PASS: live source observations with provenance",d["count"])'
       - name: Database permission and RLS assertions
         run: docker compose exec -T api python -m app.verify_invariants
       - name: Public and admin smoke
