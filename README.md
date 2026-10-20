@@ -20,7 +20,7 @@ Requires Docker Compose v2. **Do not expose port 8000 publicly without TLS, an i
 
 ```sh
 cp .env.example .env
-# Replace BOTH password placeholders with distinct strong passwords.
+# Replace BOTH password placeholders with distinct strong passwords (24+ characters).
 docker compose up --build -d
 docker compose ps
 curl http://127.0.0.1:8000/healthz
@@ -28,6 +28,14 @@ curl http://127.0.0.1:8000/v1/public/observations
 ```
 
 First run initializes a PostgreSQL database with a separate non-superuser `iges_runtime` role. Existing database volumes are not automatically reinitialized after configuration changes.
+
+This audit introduces **schema version 2**. `/readyz` rejects the original unversioned
+pilot schema. Preserve any existing volume and take an offline backup; do not run
+`down -v` against working data. An in-place migration of a populated v1 pilot is
+not supplied or certified. Use a separate Compose project and a fresh volume for
+evaluation, and retain the old deployment for a reviewed data migration.
+This branch includes all commits from `implementation/pilot-core-2026-10-20` and
+targets `main`, which initially contained only this project's title.
 
 ## Fetch actual source records
 
@@ -57,12 +65,29 @@ Admin APIs fail closed if issuer, audience or JWKS URL are not configured. There
 ## Test
 
 ```sh
-python -m pip install -r requirements.txt
+python -m pip install -r requirements-dev.txt
 pytest -q
-ruff check app tests
+ruff check app tests scripts
 ```
 
 See `docs/SECURITY.md` and `docs/OPERATIONS.md` for limits, access architecture, threat scenarios, backup/recovery and outstanding production gates.
+
+Without `IGES_TEST_ADMIN_URL`, PostgreSQL integration tests are explicitly skipped;
+the CI Compose job executes them against a disposable real database. Unit fixtures
+are artificial test inputs and are never shipped as source observations. Runtime
+images install only `requirements.txt`; test and audit tools are separate.
+
+Verify stored hashes and the audit sequence with:
+
+```sh
+docker compose exec -T api python -m app.verify_integrity
+```
+
+For a bounded live source check without database writes:
+`python -m scripts.live_worldbank`. It saves raw bytes and a timestamped receipt
+under ignored `work/live-worldbank/`, and exits unsuccessfully on upstream failure.
+The manual GitHub Actions run additionally imports real data into its disposable
+database; ordinary PR checks use explicit test fixtures and no upstream dependency.
 
 **Not completed:** third-party security audit, GDPR/DPIA review, confidential-source vault, independent external timestamp anchoring, full causal-inference engine, bank-data integration, universal entity resolution, provider-backed infrastructure, benchmarked RPO/RTO, independent public accusation publication, production runbooks and incident drills. Those are deliberate NO-GO gates, not assumed protections.
 

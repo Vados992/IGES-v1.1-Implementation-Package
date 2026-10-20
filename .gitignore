@@ -10,3 +10,6 @@ coverage.xml
 htmlcov/
 dist/
 *.egg-info/
+*.dump
+*.backup
+work/

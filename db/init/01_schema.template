@@ -1,6 +1,17 @@
 \set ON_ERROR_STOP on
-CREATE ROLE iges_runtime LOGIN PASSWORD :'runtime_password' NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT;
+CREATE ROLE iges_runtime LOGIN PASSWORD :'runtime_password' NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS;
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
+CREATE TABLE schema_version (version integer PRIMARY KEY CHECK(version=2));
+INSERT INTO schema_version VALUES (2);
+-- Only the administrator may change the login-to-project binding.
+CREATE TABLE runtime_projects (role_name name PRIMARY KEY, project_id uuid NOT NULL);
+INSERT INTO runtime_projects VALUES ('iges_runtime', :'project_id'::uuid);
+CREATE FUNCTION runtime_project() RETURNS uuid
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, public AS $$
+  SELECT project_id FROM public.runtime_projects WHERE role_name = session_user
+$$;
+REVOKE ALL ON FUNCTION runtime_project() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION runtime_project() TO iges_runtime;
 CREATE TABLE projects (
   id uuid PRIMARY KEY, name text NOT NULL,
   created_at timestamptz NOT NULL DEFAULT now()
@@ -15,6 +26,8 @@ CREATE TABLE evidence (
   retrieved_at timestamptz NOT NULL DEFAULT now(),
   content_sha256 char(64) NOT NULL CHECK(content_sha256 ~ '^[a-f0-9]{64}$'),
   raw_bytes bytea NOT NULL,
+  CHECK (octet_length(raw_bytes) BETWEEN 1 AND 2000000),
+  CHECK (content_sha256 = encode(digest(raw_bytes, 'sha256'), 'hex')),
   provenance_state text NOT NULL DEFAULT 'UNASSESSED'
     CHECK (provenance_state IN ('UNASSESSED','DISPUTED','CORROBORATED','REJECTED')),
   media_type text NOT NULL DEFAULT 'application/json',
@@ -28,7 +41,8 @@ CREATE TABLE observations (
   country_code varchar(3) NOT NULL CHECK (country_code ~ '^[A-Z]{3}$'),
   indicator_code text NOT NULL,
   period int NOT NULL CHECK (period BETWEEN 1900 AND 2100),
-  numeric_value numeric(38,10),
+  numeric_value numeric CHECK (numeric_value IS NULL OR
+    numeric_value NOT IN ('NaN'::numeric, 'Infinity'::numeric, '-Infinity'::numeric)),
   observation_status text,
   source_locator text NOT NULL,
   created_at timestamptz NOT NULL DEFAULT now(),
@@ -45,11 +59,12 @@ CREATE TABLE financial_events (
   stage text NOT NULL CHECK (stage IN (
     'COMMITMENT','APPROPRIATION','OBLIGATION','CONTRACT',
     'DISBURSEMENT','RECEIPT','EXPENDITURE','REFUND','REVERSAL')),
-  original_amount numeric(32,8) NOT NULL CHECK(original_amount >= 0),
+  original_amount numeric(32,8) NOT NULL CHECK(original_amount > 0 AND original_amount < 'Infinity'::numeric),
   currency char(3) NOT NULL CHECK(currency ~ '^[A-Z]{3}$'),
   external_reference text NOT NULL,
   payer_name text, payee_name text,
   related_event_id uuid,
+  CHECK ((stage IN ('REFUND','REVERSAL')) = (related_event_id IS NOT NULL)),
   created_at timestamptz NOT NULL DEFAULT now(),
   UNIQUE(project_id,idempotency_key),
   UNIQUE(id,project_id),
@@ -93,6 +108,7 @@ CREATE TABLE evidence_attestations (
 );
 CREATE TABLE audit_events (
   id uuid PRIMARY KEY,
+  sequence bigint NOT NULL CHECK(sequence > 0),
   project_id uuid NOT NULL REFERENCES projects(id),
   actor_sub text NOT NULL,
   action text NOT NULL,
@@ -100,9 +116,84 @@ CREATE TABLE audit_events (
   occurred_at timestamptz NOT NULL,
   previous_hash char(64) NOT NULL,
   entry_hash char(64) NOT NULL,
+  canonical_payload text NOT NULL,
+  CHECK (previous_hash ~ '^[a-f0-9]{64}$' AND entry_hash ~ '^[a-f0-9]{64}$'),
+  UNIQUE(project_id,sequence),
+  UNIQUE(project_id,previous_hash),
   UNIQUE(project_id,entry_hash)
 );
-CREATE INDEX audit_chain_order ON audit_events(project_id,occurred_at,id);
+CREATE INDEX audit_chain_order ON audit_events(project_id,sequence);
+
+CREATE FUNCTION validate_financial_event() RETURNS trigger LANGUAGE plpgsql
+SET search_path = pg_catalog, public AS $$
+DECLARE origin public.financial_events; consumed numeric;
+BEGIN
+  -- Serializes inserts even when the runtime is used outside the HTTP API.
+  PERFORM pg_advisory_xact_lock(hashtextextended('iges-finance:' || NEW.project_id::text, 0));
+  IF NEW.stage IN ('REFUND','REVERSAL') THEN
+    SELECT * INTO origin FROM public.financial_events
+      WHERE id=NEW.related_event_id AND project_id=NEW.project_id;
+    IF NOT FOUND OR origin.stage <> 'DISBURSEMENT' OR origin.currency <> NEW.currency THEN
+      RAISE EXCEPTION 'INVALID_RETURN_REFERENCE' USING ERRCODE='23514';
+    END IF;
+    SELECT coalesce(sum(original_amount),0) INTO consumed FROM public.financial_events
+      WHERE related_event_id=NEW.related_event_id AND project_id=NEW.project_id
+        AND stage IN ('REFUND','REVERSAL');
+    IF consumed + NEW.original_amount > origin.original_amount THEN
+      RAISE EXCEPTION 'RETURN_EXCEEDS_DISBURSEMENT' USING ERRCODE='23514';
+    END IF;
+  END IF;
+  RETURN NEW;
+END $$;
+CREATE TRIGGER financial_integrity BEFORE INSERT ON financial_events
+FOR EACH ROW EXECUTE FUNCTION validate_financial_event();
+
+CREATE FUNCTION validate_review() RETURNS trigger LANGUAGE plpgsql
+SET search_path = pg_catalog, public AS $$
+DECLARE claim public.claims;
+BEGIN
+  SELECT * INTO claim FROM public.claims WHERE id=NEW.claim_id AND project_id=NEW.project_id;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'CLAIM_NOT_FOUND' USING ERRCODE='23503';
+  END IF;
+  IF claim.submitted_by=NEW.reviewer_sub THEN
+    RAISE EXCEPTION 'SELF_REVIEW_FORBIDDEN' USING ERRCODE='23514';
+  END IF;
+  IF NEW.verdict='SUPPORT' AND NOT EXISTS (
+    SELECT 1 FROM public.evidence_attestations WHERE project_id=NEW.project_id
+      AND evidence_id=claim.evidence_id AND attester_sub <> claim.submitted_by
+  ) THEN
+    RAISE EXCEPTION 'INDEPENDENT_ORIGIN_ATTESTATION_REQUIRED' USING ERRCODE='23514';
+  END IF;
+  RETURN NEW;
+END $$;
+CREATE TRIGGER independent_review BEFORE INSERT ON reviews
+FOR EACH ROW EXECUTE FUNCTION validate_review();
+
+CREATE FUNCTION validate_audit() RETURNS trigger LANGUAGE plpgsql
+SET search_path = pg_catalog, public AS $$
+DECLARE previous public.audit_events; payload jsonb;
+BEGIN
+  PERFORM pg_advisory_xact_lock(hashtextextended('iges-audit:' || NEW.project_id::text, 0));
+  SELECT * INTO previous FROM public.audit_events WHERE project_id=NEW.project_id
+    ORDER BY sequence DESC LIMIT 1;
+  IF NEW.sequence <> coalesce(previous.sequence,0)+1 OR
+     NEW.previous_hash <> coalesce(previous.entry_hash,repeat('0',64)) OR
+     NEW.entry_hash <> encode(public.digest(convert_to(NEW.previous_hash || NEW.canonical_payload,'UTF8'),'sha256'),'hex') THEN
+    RAISE EXCEPTION 'INVALID_AUDIT_CHAIN' USING ERRCODE='23514';
+  END IF;
+  payload := NEW.canonical_payload::jsonb;
+  IF payload IS DISTINCT FROM jsonb_build_object(
+    'id',NEW.id::text,'project',NEW.project_id::text,'sequence',NEW.sequence,
+    'actor',NEW.actor_sub,'action',NEW.action,'subject',NEW.subject_id,
+    'timestamp',payload->>'timestamp') OR
+    (payload->>'timestamp')::timestamptz IS DISTINCT FROM NEW.occurred_at THEN
+    RAISE EXCEPTION 'AUDIT_PAYLOAD_MISMATCH' USING ERRCODE='23514';
+  END IF;
+  RETURN NEW;
+END $$;
+CREATE TRIGGER audit_integrity BEFORE INSERT ON audit_events
+FOR EACH ROW EXECUTE FUNCTION validate_audit();
 
 DO $$
 DECLARE t text;
@@ -112,9 +203,9 @@ BEGIN
     EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY',t);
     EXECUTE format('ALTER TABLE %I FORCE ROW LEVEL SECURITY',t);
     IF t = 'projects' THEN
-      EXECUTE format('CREATE POLICY tenant_policy ON %I USING (id::text = current_setting(''iges.project_id'',true)) WITH CHECK (id::text = current_setting(''iges.project_id'',true))',t);
+      EXECUTE format('CREATE POLICY tenant_policy ON %I USING (id = public.runtime_project() AND id::text = current_setting(''iges.project_id'',true)) WITH CHECK (id = public.runtime_project() AND id::text = current_setting(''iges.project_id'',true))',t);
     ELSE
-      EXECUTE format('CREATE POLICY tenant_policy ON %I USING (project_id::text = current_setting(''iges.project_id'',true)) WITH CHECK (project_id::text = current_setting(''iges.project_id'',true))',t);
+      EXECUTE format('CREATE POLICY tenant_policy ON %I USING (project_id = public.runtime_project() AND project_id::text = current_setting(''iges.project_id'',true)) WITH CHECK (project_id = public.runtime_project() AND project_id::text = current_setting(''iges.project_id'',true))',t);
     END IF;
   END LOOP;
 END $$;
@@ -122,6 +213,9 @@ END $$;
 REVOKE ALL ON SCHEMA public FROM PUBLIC;
 GRANT USAGE ON SCHEMA public TO iges_runtime;
 GRANT SELECT ON projects TO iges_runtime;
+GRANT SELECT ON schema_version TO iges_runtime;
+REVOKE ALL ON DATABASE :DBNAME FROM PUBLIC;
+GRANT CONNECT ON DATABASE :DBNAME TO iges_runtime;
 GRANT SELECT, INSERT ON evidence, observations, financial_events, claims, reviews, audit_events, evidence_attestations TO iges_runtime;
 -- Neither UPDATE nor DELETE on the evidence trail are granted to the runtime.
 -- Superusers can still modify data: independent backup and external audit anchoring remain production gates.

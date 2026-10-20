@@ -8,7 +8,13 @@ Internet clients never send arbitrary fetch URLs. The World Bank adapter constru
 
 All privileged API methods require a validated issuer, audience, expiry, `sub`, project claim and role from OIDC JWKS. With no issuer configuration, writes return HTTP 503; no hardcoded administrative token or bypass exists. Privileged users should use phishing-resistant MFA at the identity provider, which must be independently verified.
 
-The runtime database principal is not a superuser. Tables use PostgreSQL forced RLS and write-once permissions for provenance and event history. The tenant-specific PostgreSQL session variable is set only by application code in this pilot. **This alone is insufficient for hostile multi-tenant production isolation.** Before multiple clients are onboarded, perform a redesign of tenant context attestation and an independent RLS/BOLA assessment.
+The runtime principal is not a superuser and has no BYPASSRLS. Tables use forced
+RLS and append-only grants. Policies require both the transaction-local project
+context and an administrator-owned mapping of `session_user` to the pilot project;
+changing the session context cannot grant access to another project. Read endpoints
+use read-only transactions. The runtime cannot read or change its project mapping.
+This is still a single-project pilot: hostile multi-tenant deployment requires an
+independent RLS/BOLA assessment and a complete identity/provisioning design.
 
 Evidence stores source raw bytes and SHA-256. A checksum does not establish truthful content; attestation of official origin is different from claim verification. Reviews cannot be submitted by a claim's author, and there is no public allegation-publishing endpoint.
 
@@ -33,8 +39,22 @@ Evidence stores source raw bytes and SHA-256. A checksum does not establish trut
 - Independent penetration testing and sustained performance characterization.
 - API rate limiting and reverse proxy WAF / TLS / IP filtering.
 - Source attribution licensing, data retention policy, DPIA and correction process.
-- Stronger concurrent financial return enforcement and idempotency replay behavior.
+- External reconciliation of source-backed financial events; concurrency invariants
+  are now enforced with transactional locks and database checks, and exercised in CI.
 - Continuous vulnerability scanning, SBOM provenance and image signing.
 - Scrutinized OIDC provider claims mappings, MFA enforcement and incident response.
 
 **NO-GO for public multi-tenant or confidential-source use until controls are implemented and tested.**
+
+Request bodies are bounded to 64 KiB even without Content-Length; responses receive
+no-store and basic browser safety headers. These controls do not replace proxy TLS,
+connection/rate limits, phishing-resistant MFA or an independent security review.
+Database statements and lock waits have deadlines. JWKS fetches have a timeout;
+key rotation and outage behavior must also be checked against the actual IdP.
+
+The sequence-based audit chain retains its canonical hash input and is checked by
+both a database trigger and `python -m app.verify_integrity`. Evidence digests are
+also checked in SQL and by the verifier. A database administrator can rewrite an
+entire chain or remove its tail; independent externally held anchors remain absent.
+Attestation methods describe reviewer assertions; naming `DIGITAL_SIGNATURE` does
+not execute a signature validator or establish that a signature was checked.

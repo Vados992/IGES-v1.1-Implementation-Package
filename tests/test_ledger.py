@@ -35,3 +35,14 @@ def test_refunds_and_reversals_are_separate():
 def test_invalid_events_rejected(stage, amount):
     with pytest.raises(ValueError):
         stage_totals([{"stage": stage, "amount": amount}])
+
+
+def test_mixed_currencies_cannot_be_summed():
+    with pytest.raises(ValueError, match="currency"):
+        stage_totals([{"stage": "DISBURSEMENT", "amount": "10", "currency": "EUR"},
+                      {"stage": "DISBURSEMENT", "amount": "10", "currency": "USD"}])
+
+
+def test_large_amount_precision_preserved():
+    value = "999999999999999999999999.12345678"
+    assert stage_totals([{"stage": "CONTRACT", "amount": value}])["CONTRACT"] == value

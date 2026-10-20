@@ -1,51 +1,101 @@
-name: IGES security and smoke CI
+name: IGES pilot validation
 on:
   push:
-    branches: [main, "implementation/**"]
+    branches: [main, "implementation/**", "fix/**"]
   pull_request:
   workflow_dispatch:
 permissions:
   contents: read
+concurrency:
+  group: iges-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
-  test:
+  unit:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      matrix:
+        python: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+      - run: python -m pip install -r requirements-dev.txt
+      - run: python -m compileall -q app tests scripts
+      - run: ruff check app tests scripts
+      - run: pytest -q -m 'not integration'
+  dependencies:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Install
-        run: python -m pip install -r requirements.txt
-      - name: Syntax compilation
-        run: python -m compileall -q app tests
-      - name: Static lint
-        run: ruff check app tests
-      - name: Unit and fail-closed API tests
-        run: pytest -q
-      - name: Docker service boot and readiness
+      - run: python -m pip install -r requirements-dev.txt
+      - run: pip-audit -r requirements.txt
+  postgres-compose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -r requirements-dev.txt
+      - name: Prepare disposable credentials (including URL-reserved characters)
+        run: python scripts/ci_env.py
+      - name: Validate Compose and start fresh database and nonroot API
         run: |
-          cat > .env <<'EOF'
-          POSTGRES_ADMIN_PASSWORD=ci_admin_random_not_for_production_2026
-          IGES_DB_PASSWORD=ci_runtime_random_not_for_production_2026
-          IGES_PUBLIC_PROJECT_ID=00000000-0000-4000-8000-000000000001
-          IGES_OIDC_ISSUER=
-          IGES_OIDC_AUDIENCE=
-          IGES_OIDC_JWKS_URL=
-          EOF
-          docker compose up --build -d
-          for i in $(seq 1 40); do
-            if curl --silent --fail http://127.0.0.1:8000/readyz; then exit 0; fi
-            sleep 3
-          done
-          docker compose logs
-          exit 1
-      - name: Public and admin smoke
+          docker compose config --quiet
+          docker compose up --build --wait --wait-timeout 180
+      - name: PostgreSQL RLS, API, concurrency and audit integration
         run: |
-          curl --fail --silent http://127.0.0.1:8000/v1/public/observations
-          test "$(curl --silent --output /dev/null --write-out '%{http_code}' -X POST \
-            http://127.0.0.1:8000/v1/admin/ingest/worldbank \
-            -H 'Content-Type: application/json' \
-            -d '{"country":"PRT","indicator":"SP.POP.TOTL","start":2023,"end":2024}')" = "503"
-      - name: Logs after test
+          docker compose exec -T db sh -c 'psql -U postgres -d iges -c "CREATE DATABASE iges_restore"'
+          docker compose run --rm -v "$PWD/tests:/opt/iges/tests:ro" -v "$PWD/pyproject.toml:/opt/iges/pyproject.toml:ro" \
+            -e IGES_TEST_ADMIN_URL="$(cat work/ci-admin-url)" \
+            --user root api sh -c 'pip install --no-cache-dir --target /tmp/testdeps pytest==9.1.1 && PYTHONPATH=/tmp/testdeps:/opt/iges python -m pytest -q -p no:cacheprovider -m integration'
+      - name: HTTP smoke and missing OIDC denial
+        run: python scripts/http_smoke.py
+      - name: Restart existing volume without repeating initialization
+        run: |
+          docker compose restart
+          docker compose up --wait --wait-timeout 120
+          python scripts/http_smoke.py
+          docker compose exec -T api python -m app.verify_integrity
+      - name: Backup and restore disposable database
+        run: |
+          docker compose exec -T db pg_dump -U postgres -d iges -Fc > work/iges.dump
+          docker compose exec -T db pg_restore -U postgres -d iges_restore --exit-on-error < work/iges.dump
+          docker compose exec -T db psql -U postgres -d iges_restore -v ON_ERROR_STOP=1 \
+            -c "SELECT version FROM schema_version" -c "SELECT count(*) FROM evidence"
+          docker compose run --rm -e IGES_DB_NAME=iges_restore api python -m app.verify_integrity
+      - name: Live official-source ingestion (manual validation runs only)
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          docker compose run --rm api python -m app.seed_worldbank --country PRT --indicator SP.POP.TOTL --start 2022 --end 2024
+          docker compose exec -T api python -m app.verify_integrity
+      - name: Diagnostics
+        if: failure()
+        run: docker compose logs --tail 100
+      - name: Remove disposable services and test data
         if: always()
-        run: docker compose logs --tail 120 || true
+        run: docker compose down --volumes --remove-orphans
+  live-worldbank:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -r requirements.txt
+      - name: Live official-source check (no fallback)
+        run: python -m scripts.live_worldbank
+      - uses: actions/upload-artifact@v4
+        with:
+          name: worldbank-source-check
+          path: work/live-worldbank

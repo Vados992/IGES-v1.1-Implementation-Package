@@ -25,7 +25,8 @@ services:
       db:
         condition: service_healthy
     environment:
-      IGES_DATABASE_URL: postgresql+psycopg://iges_runtime:${IGES_DB_PASSWORD:?set runtime secret in .env}@db:5432/iges
+      IGES_DB_PASSWORD: ${IGES_DB_PASSWORD:?set runtime secret in .env}
+      IGES_DB_HOST: db
       IGES_PUBLIC_PROJECT_ID: ${IGES_PUBLIC_PROJECT_ID:?set pilot project id in .env}
       IGES_OIDC_ISSUER: ${IGES_OIDC_ISSUER:-}
       IGES_OIDC_AUDIENCE: ${IGES_OIDC_AUDIENCE:-}
@@ -39,5 +40,11 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/readyz', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
 volumes:
   iges_db:

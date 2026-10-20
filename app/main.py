@@ -2,16 +2,21 @@
 from __future__ import annotations
 
 from decimal import Decimal
-from uuid import UUID, uuid4
+from uuid import UUID
 
 import httpx
 from fastapi import Depends, FastAPI, HTTPException, Query
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import SQLAlchemyError
+from starlette.responses import JSONResponse
+from starlette.concurrency import run_in_threadpool
 
-from app.auth import require_role
+from app.auth import require_role, https_endpoint
+from app.config import settings
 from app.database import tenant_session
+from app.middleware import BodyLimitMiddleware
 from app.persistence import append_audit, store_snapshot
 from app.worldbank import ALLOWED_INDICATORS, fetch_snapshot
 
@@ -20,22 +25,27 @@ app = FastAPI(
     version="1.1.0-pilot",
     description="Source-attributed public economic records; no automated political verdicts.",
 )
+app.add_middleware(BodyLimitMiddleware, max_bytes=65536)
 
 
-class IngestRequest(BaseModel):
+class RequestModel(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+
+class IngestRequest(RequestModel):
     country: str = Field(min_length=3, max_length=3, pattern=r"^[A-Z]{3}$")
     indicator: str
     start: int = Field(ge=1960, le=2100)
     end: int = Field(ge=1960, le=2100)
 
 
-class AttestationRequest(BaseModel):
+class AttestationRequest(RequestModel):
     method: str = Field(pattern=r"^(OFFICIAL_API|DIGITAL_SIGNATURE|INDEPENDENT_CORROBORATION)$")
     rationale: str = Field(min_length=20, max_length=5000)
     proof_url: str | None = Field(default=None, max_length=2000)
 
 
-class FinanceEventRequest(BaseModel):
+class FinanceEventRequest(RequestModel):
     evidence_id: UUID
     idempotency_key: str = Field(min_length=8, max_length=128)
     stage: str = Field(
@@ -49,14 +59,29 @@ class FinanceEventRequest(BaseModel):
     related_event_id: UUID | None = None
 
 
-class ClaimRequest(BaseModel):
+class ClaimRequest(RequestModel):
     statement: str = Field(min_length=10, max_length=5000)
     evidence_id: UUID
 
 
-class ReviewRequest(BaseModel):
+class ReviewRequest(RequestModel):
     verdict: str = Field(pattern=r"^(SUPPORT|CONTRADICT|INSUFFICIENT)$")
     rationale: str = Field(min_length=20, max_length=5000)
+
+
+@app.exception_handler(SQLAlchemyError)
+async def database_error(request, exc):
+    return JSONResponse(status_code=503, content={"detail": "DATABASE_UNAVAILABLE"})
+
+
+@app.middleware("http")
+async def security_headers(request, call_next):
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 @app.get("/healthz")
@@ -67,8 +92,21 @@ def health():
 @app.get("/readyz")
 def ready():
     try:
-        with tenant_session() as session:
-            session.execute(text("SELECT 1")).scalar_one()
+        with tenant_session(read_only=True) as session:
+            version = session.execute(text("SELECT version FROM schema_version")).scalar_one()
+            project_count = session.execute(text("SELECT count(*) FROM projects")).scalar_one()
+            unsafe = session.execute(text(
+                "SELECT rolsuper OR rolbypassrls OR rolcreatedb OR rolcreaterole "
+                "FROM pg_roles WHERE rolname=current_user"
+            )).scalar_one()
+            rls_count = session.execute(text(
+                "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace "
+                "WHERE n.nspname='public' AND c.relname IN "
+                "('projects','evidence','observations','financial_events','claims','reviews',"
+                "'audit_events','evidence_attestations') AND c.relrowsecurity AND c.relforcerowsecurity"
+            )).scalar_one()
+            if version != 2 or project_count != 1 or unsafe or rls_count != 8:
+                raise RuntimeError("schema, role, project or RLS not ready")
         return {"status": "ready"}
     except Exception:
         raise HTTPException(status_code=503, detail="DATABASE_UNAVAILABLE") from None
@@ -95,14 +133,14 @@ def public_observations(
                  e.provenance_state
           FROM observations o
           JOIN evidence e ON e.id=o.evidence_id AND e.project_id=o.project_id
-          WHERE (:country IS NULL OR o.country_code=:country)
-            AND (:indicator IS NULL OR o.indicator_code=:indicator)
+          WHERE (CAST(:country AS text) IS NULL OR o.country_code=:country)
+            AND (CAST(:indicator AS text) IS NULL OR o.indicator_code=:indicator)
           ORDER BY o.country_code, o.indicator_code, o.period,
                    e.retrieved_at DESC, o.id DESC
         ) latest
         ORDER BY period DESC, country_code, indicator_code LIMIT :limit
     """)
-    with tenant_session() as session:
+    with tenant_session(read_only=True) as session:
         rows = session.execute(
             query, {"country": country, "indicator": indicator, "limit": limit}
         ).mappings().all()
@@ -112,7 +150,7 @@ def public_observations(
 
 @app.get("/v1/public/observations/{observation_id}/provenance")
 def observation_provenance(observation_id: UUID):
-    with tenant_session() as session:
+    with tenant_session(read_only=True) as session:
         row = session.execute(
             text("""
             SELECT o.id::text AS observation_id, o.source_locator, o.period,
@@ -139,10 +177,12 @@ async def ingest_worldbank(
         raise HTTPException(status_code=422, detail="INDICATOR_NOT_ALLOWED")
     try:
         snapshot = await fetch_snapshot(body.country, body.indicator, body.start, body.end)
-    except (httpx.HTTPError, ValueError, UnicodeDecodeError):
+    except (httpx.HTTPError, ValueError, UnicodeDecodeError, TimeoutError, RecursionError):
         raise HTTPException(status_code=502, detail="UPSTREAM_INVALID_OR_UNAVAILABLE") from None
-    with tenant_session() as session:
-        evidence_id, count, created = store_snapshot(session, snapshot, user["sub"])
+    def persist():
+        with tenant_session() as session:
+            return store_snapshot(session, snapshot, user["sub"])
+    evidence_id, count, created = await run_in_threadpool(persist)
     return {"evidence_id": evidence_id, "inserted_observations": count,
             "new_snapshot": created, "content_sha256": snapshot.sha256,
             "provenance_state": "UNASSESSED"}
@@ -153,7 +193,7 @@ def attest_evidence(
     evidence_id: UUID, body: AttestationRequest,
     user: dict = Depends(require_role("reviewer"))
 ):
-    if body.proof_url is not None and not body.proof_url.startswith("https://"):
+    if body.proof_url is not None and not https_endpoint(body.proof_url):
         raise HTTPException(status_code=422, detail="PROOF_URL_HTTPS_REQUIRED")
     with tenant_session() as session:
         found = session.execute(
@@ -188,6 +228,8 @@ def add_financial_event(
     if amount <= 0:
         raise HTTPException(status_code=422, detail="AMOUNT_MUST_BE_POSITIVE")
     with tenant_session() as session:
+        session.execute(text("SELECT pg_advisory_xact_lock(hashtextextended(:key,0))"),
+                        {"key": "iges-finance:" + str(settings.project_id)})
         prior = session.execute(
             text("SELECT * FROM financial_events WHERE idempotency_key=:key"),
             {"key": body.idempotency_key},
@@ -278,8 +320,9 @@ def review_claim(
             raise HTTPException(status_code=403, detail="SELF_REVIEW_FORBIDDEN")
         if body.verdict == "SUPPORT":
             is_attested = session.execute(
-                text("SELECT 1 FROM evidence_attestations WHERE evidence_id=:eid LIMIT 1"),
-                {"eid": str(claim["evidence_id"])},
+                text("SELECT 1 FROM evidence_attestations WHERE evidence_id=:eid "
+                     "AND attester_sub <> :author LIMIT 1"),
+                {"eid": str(claim["evidence_id"]), "author": claim["submitted_by"]},
             ).first()
             if not is_attested:
                 raise HTTPException(status_code=409, detail="ORIGIN_ATTESTATION_REQUIRED")
