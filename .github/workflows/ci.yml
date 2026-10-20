@@ -31,6 +31,8 @@ jobs:
           IGES_OIDC_ISSUER=
           IGES_OIDC_AUDIENCE=
           IGES_OIDC_JWKS_URL=
+          IGES_DOMAIN=testing.example.org
+          IGES_ACME_EMAIL=operator@testing.example.org
           EOF
           docker compose up --build -d
           for i in $(seq 1 40); do
@@ -54,6 +56,10 @@ jobs:
             --fiscal-year 2024 --limit 5
           curl --fail --silent http://127.0.0.1:8000/v1/public/awards \
             | python -c 'import sys,json; d=json.load(sys.stdin); assert d["count"]>=1; assert all(r["source_url"].startswith("https://api.usaspending.gov/") and len(r["request_sha256"])==64 for r in d["records"]); print("PASS: live official award records",d["count"])'
+      - name: Verify audit chain and immutable source hashes
+        run: docker compose exec -T api python -m app.verify_audit
+      - name: Validate public gateway deployment overlay
+        run: docker compose -f compose.yaml -f deploy/compose.public.yaml config >/dev/null
       - name: Database permission and RLS assertions
         run: docker compose exec -T api python -m app.verify_invariants
       - name: Public and admin smoke

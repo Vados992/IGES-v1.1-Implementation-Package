@@ -9,6 +9,7 @@ services:
         condition: service_started
     environment:
       IGES_DOMAIN: ${IGES_DOMAIN:?set DNS domain}
+      IGES_ACME_EMAIL: ${IGES_ACME_EMAIL:?set ACME contact email}
     ports:
       - "80:80"
       - "443:443"

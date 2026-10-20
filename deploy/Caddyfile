@@ -1,5 +1,5 @@
 {
-    email ops@{env.IGES_DOMAIN}
+    email {$IGES_ACME_EMAIL}
 }
 
 {$IGES_DOMAIN} {

@@ -27,6 +27,7 @@ cd IGES-v1.1-Implementation-Package
 cp .env.example .env
 # Configure strong distinct POSTGRES_ADMIN_PASSWORD and IGES_DB_PASSWORD
 # Add IGES_DOMAIN=your-owned-domain.example to .env
+# Add IGES_ACME_EMAIL=operator@your-owned-domain.example to .env
 docker compose -f compose.yaml -f deploy/compose.public.yaml config
 docker compose -f compose.yaml -f deploy/compose.public.yaml up --build -d
 curl --fail https://your-owned-domain.example/readyz
