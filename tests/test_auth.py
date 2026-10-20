@@ -23,7 +23,8 @@ def signer(monkeypatch):
     def token(**changes):
         payload = {"sub": "reviewer-1", "iss": "https://issuer.example", "aud": "iges",
                    "exp": int(datetime.now(timezone.utc).timestamp()) + 300,
-                   "project_id": str(auth.settings.project_id), "roles": ["reviewer"]}
+                   "project_id": str(auth.settings.project_id), "roles": ["reviewer"],
+                   "amr": ["pwd", "otp"], "auth_time": int(datetime.now(timezone.utc).timestamp())}
         payload.update(changes)
         return HTTPAuthorizationCredentials(scheme="Bearer", credentials=jwt.encode(payload, private, algorithm="RS256"))
     return token
@@ -70,3 +71,29 @@ def test_missing_bearer_is_401_with_configured_issuer(signer):
 @pytest.mark.parametrize("url", ["http://issuer.example", "https://", "https://user:pass@example.com", "https://example.com/#fragment"])
 def test_invalid_https_endpoint(url):
     assert not auth.https_endpoint(url)
+
+
+@pytest.mark.parametrize("amr", [None, "mfa", [], ["pwd"], ["otp"], ["hwk"], [True], [{}]])
+def test_single_factor_tokens_are_denied(signer, amr):
+    with pytest.raises(HTTPException) as error:
+        auth.verified_identity(signer(amr=amr))
+    assert error.value.detail == "MFA_REQUIRED"
+
+
+@pytest.mark.parametrize("auth_time", [None, 1, True, "123", 9999999999])
+def test_stale_or_invalid_authentication_is_denied(signer, auth_time):
+    with pytest.raises(HTTPException) as error:
+        auth.verified_identity(signer(auth_time=auth_time))
+    assert error.value.detail == "RECENT_AUTHENTICATION_REQUIRED"
+
+
+def test_provider_mfa_assertion_is_accepted(signer):
+    assert auth.verified_identity(signer(amr=["mfa"]))["sub"] == "reviewer-1"
+
+
+def test_configured_context_is_required(signer, monkeypatch):
+    monkeypatch.setattr(auth, "settings", replace(auth.settings, oidc_required_acr="iges-mfa"))
+    with pytest.raises(HTTPException) as error:
+        auth.verified_identity(signer(acr="password-only"))
+    assert error.value.detail == "AUTHENTICATION_CONTEXT_REQUIRED"
+    assert auth.verified_identity(signer(acr="iges-mfa"))["acr"] == "iges-mfa"

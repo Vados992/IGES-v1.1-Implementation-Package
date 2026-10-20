@@ -16,6 +16,12 @@ Capabilities:
 
 ## Local startup
 
+For a native Windows installation with an actual local Keycloak and mandatory
+MFA, see [Windows pilot](docs/WINDOWS_LOCAL_PILOT.md). The application now rejects
+single-factor tokens by default; a signed `amr` asserting MFA and recent `auth_time`
+are required in addition to issuer/audience/project/roles. Human OTP enrollment
+and the independent security review remain separate completion steps.
+
 Requires Docker Compose v2. **Do not expose port 8000 publicly without TLS, an identity provider, production monitoring and legal review.**
 
 ```sh
@@ -52,6 +58,7 @@ Other allowlisted indicators: `NY.GDP.MKTP.CD` (GDP current US$) and `GC.DOD.TOT
 ## API
 
 - `GET /healthz`, `GET /readyz`
+- `GET /v1/admin/whoami` (validated identity with required MFA)
 - `GET /v1/public/observations?country=PRT&indicator=SP.POP.TOTL&limit=50`
 - `GET /v1/public/observations/{id}/provenance`
 - `POST /v1/admin/ingest/worldbank` (OIDC role `ingestor`)

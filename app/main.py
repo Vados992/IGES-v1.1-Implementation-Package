@@ -13,7 +13,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from starlette.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 
-from app.auth import require_role, https_endpoint
+from app.auth import require_role, https_endpoint, verified_identity
 from app.config import settings
 from app.database import tenant_session
 from app.middleware import BodyLimitMiddleware
@@ -87,6 +87,14 @@ async def security_headers(request, call_next):
 @app.get("/healthz")
 def health():
     return {"status": "alive", "environment": "controlled_pilot"}
+
+
+@app.get("/v1/admin/whoami")
+def whoami(user: dict = Depends(verified_identity)):
+    return {"subject": user["sub"], "project_id": user["project_id"],
+            "roles": user.get("roles", []), "amr": user.get("amr", []),
+            "acr": user.get("acr"), "auth_time": user.get("auth_time"),
+            "mfa_enforced": settings.oidc_require_mfa}
 
 
 @app.get("/readyz")

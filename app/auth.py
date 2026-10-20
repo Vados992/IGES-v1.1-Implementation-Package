@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from functools import lru_cache
 from urllib.parse import urlsplit
+import time
+import ssl
 
 import jwt
 from fastapi import Depends, HTTPException
@@ -17,7 +19,8 @@ bearer = HTTPBearer(auto_error=False)
 
 @lru_cache(maxsize=2)
 def _jwks_client(url: str) -> PyJWKClient:
-    return PyJWKClient(url, cache_jwk_set=True, lifespan=300, timeout=5)
+    context = ssl.create_default_context(cafile=settings.oidc_ca_file)
+    return PyJWKClient(url, cache_jwk_set=True, lifespan=300, timeout=5, ssl_context=context)
 
 
 def https_endpoint(value: str) -> bool:
@@ -27,6 +30,24 @@ def https_endpoint(value: str) -> bool:
                     and not parsed.password and not parsed.fragment)
     except ValueError:
         return False
+
+
+def verify_mfa(payload: dict) -> None:
+    """Trust only signed provider assertions, never a client-supplied MFA header."""
+    if not settings.oidc_require_mfa:
+        return
+    amr = payload.get("amr")
+    if not isinstance(amr, list) or not all(isinstance(method, str) for method in amr):
+        raise HTTPException(status_code=403, detail="MFA_REQUIRED")
+    methods = set(amr)
+    if "mfa" not in methods and not {"pwd", "otp"}.issubset(methods):
+        raise HTTPException(status_code=403, detail="MFA_REQUIRED")
+    if settings.oidc_required_acr and payload.get("acr") != settings.oidc_required_acr:
+        raise HTTPException(status_code=403, detail="AUTHENTICATION_CONTEXT_REQUIRED")
+    auth_time = payload.get("auth_time")
+    if (type(auth_time) is not int or auth_time > time.time() + 20
+            or time.time() - auth_time > settings.oidc_max_auth_age):
+        raise HTTPException(status_code=403, detail="RECENT_AUTHENTICATION_REQUIRED")
 
 
 def verified_identity(
@@ -58,6 +79,7 @@ def verified_identity(
             raise HTTPException(status_code=401, detail="INVALID_TOKEN")
         if str(payload.get("project_id", "")) != str(settings.project_id):
             raise HTTPException(status_code=403, detail="PROJECT_DENIED")
+        verify_mfa(payload)
         return payload
     except HTTPException:
         raise
