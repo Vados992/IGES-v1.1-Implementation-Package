@@ -15,7 +15,8 @@ from sqlalchemy.exc import IntegrityError
 
 from app.auth import require_role
 from app.database import tenant_session
-from app.persistence import append_audit, store_snapshot
+from app.persistence import append_audit, store_awards, store_snapshot
+from app.usaspending import fetch_awards
 from app.worldbank import ALLOWED_INDICATORS, fetch_snapshot
 
 app = FastAPI(
@@ -42,6 +43,11 @@ class IngestRequest(BaseModel):
     indicator: str
     start: int = Field(ge=1960, le=2100)
     end: int = Field(ge=1960, le=2100)
+
+
+class AwardIngestRequest(BaseModel):
+    fiscal_year: int = Field(ge=2008, le=2026)
+    limit: int = Field(default=10, ge=1, le=25)
 
 
 class AttestationRequest(BaseModel):
@@ -161,6 +167,82 @@ async def ingest_worldbank(
     return {"evidence_id": evidence_id, "inserted_observations": count,
             "new_snapshot": created, "content_sha256": snapshot.sha256,
             "provenance_state": "UNASSESSED"}
+
+
+
+@app.get("/v1/public/awards")
+def public_awards(limit: int = Query(default=50, ge=1, le=100)):
+    """Public contract award totals, explicitly not bank transfers or final expenditure."""
+    with tenant_session() as session:
+        rows = session.execute(
+            text("""
+            SELECT id::text AS id, source_award_key, external_award_id,
+                   recipient_name, awarding_agency, funding_agency,
+                   award_amount::text AS award_amount, currency,
+                   source_locator, source_url, source_request,
+                   retrieved_at, content_sha256, request_sha256,
+                   provenance_state
+            FROM (
+              SELECT DISTINCT ON (a.source_award_key)
+                a.id, a.source_award_key, a.external_award_id, a.recipient_name,
+                a.awarding_agency, a.funding_agency, a.award_amount, a.currency,
+                a.source_locator, e.source_url, e.source_request,
+                e.retrieved_at, e.content_sha256, e.request_sha256, e.provenance_state
+              FROM public_awards a
+              JOIN evidence e ON e.id=a.evidence_id AND e.project_id=a.project_id
+              ORDER BY a.source_award_key, e.retrieved_at DESC, a.id DESC
+            ) recent
+            ORDER BY award_amount DESC NULLS LAST
+            LIMIT :limit
+            """),
+            {"limit": limit},
+        ).mappings().all()
+    return {
+        "count": len(rows),
+        "records": [dict(row) for row in rows],
+        "meaning": "Award Amount as reported by USAspending; NOT a disbursement or proof of downstream spending",
+        "coverage": "Only the bounded source search pages ingested; NOT all US federal awards",
+    }
+
+
+@app.get("/v1/public/awards/{award_id}/provenance")
+def award_provenance(award_id: UUID):
+    with tenant_session() as session:
+        row = session.execute(
+            text("""
+            SELECT a.id::text AS award_record_id, a.source_locator,
+                   e.id::text AS evidence_id, e.provider, e.source_url,
+                   e.source_request, e.retrieved_at, e.content_sha256,
+                   e.request_sha256, e.provenance_state
+            FROM public_awards a
+            JOIN evidence e ON e.id=a.evidence_id AND e.project_id=a.project_id
+            WHERE a.id=:id
+            """),
+            {"id": str(award_id)},
+        ).mappings().first()
+    if row is None:
+        raise HTTPException(status_code=404, detail="AWARD_NOT_FOUND")
+    return dict(row)
+
+
+@app.post("/v1/admin/ingest/usaspending")
+async def ingest_usaspending(
+    body: AwardIngestRequest, user: dict = Depends(require_role("ingestor"))
+):
+    try:
+        snapshot = await fetch_awards(body.fiscal_year, body.limit)
+    except (httpx.HTTPError, ValueError, UnicodeDecodeError):
+        raise HTTPException(status_code=502, detail="UPSTREAM_INVALID_OR_UNAVAILABLE") from None
+    with tenant_session() as session:
+        evidence_id, count, created = store_awards(session, snapshot, user["sub"])
+    return {
+        "evidence_id": evidence_id, "awards_inserted": count,
+        "new_snapshot": created, "content_sha256": snapshot.sha256,
+        "request_sha256": snapshot.request_sha256,
+        "has_next_page": snapshot.has_next_page,
+        "provenance_state": "UNASSESSED",
+        "meaning": "Published award amount, not verified paid transfer",
+    }
 
 
 @app.post("/v1/admin/evidence/{evidence_id}/attest")
