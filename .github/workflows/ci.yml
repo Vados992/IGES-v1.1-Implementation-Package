@@ -21,7 +21,7 @@ jobs:
       - name: Static lint
         run: ruff check app tests
       - name: Unit and fail-closed API tests
-        run: pytest -q
+        run: python -m pytest -q
       - name: Docker service boot and readiness
         run: |
           cat > .env <<'EOF'
@@ -39,8 +39,11 @@ jobs:
           done
           docker compose logs
           exit 1
+      - name: Database permission and RLS assertions
+        run: docker compose exec -T api python -m app.verify_invariants
       - name: Public and admin smoke
         run: |
+          curl --fail --silent http://127.0.0.1:8000/ | grep -q "IGES"
           curl --fail --silent http://127.0.0.1:8000/v1/public/observations
           test "$(curl --silent --output /dev/null --write-out '%{http_code}' -X POST \
             http://127.0.0.1:8000/v1/admin/ingest/worldbank \
