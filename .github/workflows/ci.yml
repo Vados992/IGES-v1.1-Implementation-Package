@@ -36,6 +36,12 @@ jobs:
           python-version: "3.12"
       - run: python -m pip install -r requirements-dev.txt
       - run: pip-audit -r requirements.txt
+      - run: bandit -r app -f json -o work-bandit.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: application-static-security-scan
+          path: work-bandit.json
   postgres-compose:
     runs-on: ubuntu-latest
     timeout-minutes: 20
