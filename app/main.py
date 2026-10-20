@@ -2,10 +2,13 @@
 from __future__ import annotations
 
 from decimal import Decimal
+from pathlib import Path
 from uuid import UUID
 
 import httpx
 from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
@@ -20,6 +23,18 @@ app = FastAPI(
     version="1.1.0-pilot",
     description="Source-attributed public economic records; no automated political verdicts.",
 )
+
+
+STATIC_DIR = Path(__file__).parent / "static"
+app.mount("/assets", StaticFiles(directory=STATIC_DIR), name="assets")
+
+
+@app.get("/", include_in_schema=False)
+def dashboard():
+    return FileResponse(
+        STATIC_DIR / "index.html",
+        headers={"Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self'; object-src 'none'; base-uri 'none'"},
+    )
 
 
 class IngestRequest(BaseModel):
