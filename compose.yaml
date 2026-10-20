@@ -1,0 +1,43 @@
+services:
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_DB: iges
+      POSTGRES_PASSWORD: ${POSTGRES_ADMIN_PASSWORD:?set admin secret in .env}
+      IGES_DB_PASSWORD: ${IGES_DB_PASSWORD:?set runtime secret in .env}
+      IGES_PUBLIC_PROJECT_ID: ${IGES_PUBLIC_PROJECT_ID:?set pilot project id in .env}
+    volumes:
+      - iges_db:/var/lib/postgresql/data
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d iges"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    security_opt:
+      - no-new-privileges:true
+  api:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      IGES_DATABASE_URL: postgresql+psycopg://iges_runtime:${IGES_DB_PASSWORD:?set runtime secret in .env}@db:5432/iges
+      IGES_PUBLIC_PROJECT_ID: ${IGES_PUBLIC_PROJECT_ID:?set pilot project id in .env}
+      IGES_OIDC_ISSUER: ${IGES_OIDC_ISSUER:-}
+      IGES_OIDC_AUDIENCE: ${IGES_OIDC_AUDIENCE:-}
+      IGES_OIDC_JWKS_URL: ${IGES_OIDC_JWKS_URL:-}
+    ports:
+      - "127.0.0.1:8000:8000"
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,noexec,nosuid
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+volumes:
+  iges_db:
