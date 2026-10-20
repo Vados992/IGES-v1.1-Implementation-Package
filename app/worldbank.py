@@ -52,7 +52,9 @@ def parse_snapshot(raw: bytes, url: str, country: str, indicator: str, start: in
     payload = json.loads(raw.decode("utf-8"), parse_float=Decimal)
     if not isinstance(payload, list) or len(payload) != 2 or not isinstance(payload[1], list):
         raise ValueError("unexpected World Bank response envelope")
-    if not isinstance(payload[0], dict) or int(payload[0].get('pages', 1)) != 1:\n        raise ValueError('source response pagination is incomplete')\n    rows = payload[1]
+    if not isinstance(payload[0], dict) or int(payload[0].get('pages', 1)) != 1:
+        raise ValueError('source response pagination is incomplete')
+    rows = payload[1]
     if len(rows) > 100:
         raise ValueError("response has excessive observation count")
     result = []
