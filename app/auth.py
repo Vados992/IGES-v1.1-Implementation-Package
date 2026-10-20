@@ -61,7 +61,7 @@ def verified_identity(
         return payload
     except HTTPException:
         raise
-    except (PyJWTError, ValueError, KeyError, OSError):
+    except (PyJWTError, ValueError, TypeError, KeyError, OSError):
         raise HTTPException(status_code=401, detail="INVALID_TOKEN") from None
 
 

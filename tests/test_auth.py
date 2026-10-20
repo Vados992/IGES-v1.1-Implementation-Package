@@ -37,6 +37,7 @@ def test_valid_signed_identity_and_role(signer):
 @pytest.mark.parametrize("change,status", [
     ({"exp": 1}, 401), ({"aud": "other"}, 401), ({"iss": "https://other.example"}, 401),
     ({"project_id": "other"}, 403), ({"sub": " "}, 401), ({"sub": None}, 401),
+    ({"exp": None}, 401), ({"exp": []}, 401), ({"aud": None}, 401),
 ])
 def test_invalid_signed_identity_denied(signer, change, status):
     with pytest.raises(HTTPException) as error:
