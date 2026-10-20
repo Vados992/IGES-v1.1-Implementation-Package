@@ -89,7 +89,9 @@ def health():
 def ready():
     try:
         with tenant_session() as session:
-            session.execute(text("SELECT 1")).scalar_one()
+            session.execute(text("SELECT 1 FROM projects LIMIT 1")).all()
+            session.execute(text("SELECT 1 FROM evidence LIMIT 1")).all()
+            session.execute(text("SELECT 1 FROM public_awards LIMIT 1")).all()
         return {"status": "ready"}
     except Exception:
         raise HTTPException(status_code=503, detail="DATABASE_UNAVAILABLE") from None
