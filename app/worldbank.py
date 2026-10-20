@@ -52,7 +52,7 @@ def parse_snapshot(raw: bytes, url: str, country: str, indicator: str, start: in
     payload = json.loads(raw.decode("utf-8"), parse_float=Decimal)
     if not isinstance(payload, list) or len(payload) != 2 or not isinstance(payload[1], list):
         raise ValueError("unexpected World Bank response envelope")
-    rows = payload[1]
+    if not isinstance(payload[0], dict) or int(payload[0].get('pages', 1)) != 1:\n        raise ValueError('source response pagination is incomplete')\n    rows = payload[1]
     if len(rows) > 100:
         raise ValueError("response has excessive observation count")
     result = []
@@ -78,7 +78,7 @@ def parse_snapshot(raw: bytes, url: str, country: str, indicator: str, start: in
             raise ValueError("invalid numeric value") from exc
         if value is not None and not value.is_finite():
             raise ValueError("non-finite numeric value")
-        status = row.get("obs_status")
+        if value is not None and value.adjusted() >= 28:\n            raise ValueError('source numeric value exceeds database precision')\n        status = row.get("obs_status")
         result.append(Observation(code, indicator, year, value, str(status) if status else None, f"$[1][{i}]"))
     if not result:
         raise ValueError("source response contained zero observations")

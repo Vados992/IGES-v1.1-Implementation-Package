@@ -4,7 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 from datetime import datetime, timezone
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session

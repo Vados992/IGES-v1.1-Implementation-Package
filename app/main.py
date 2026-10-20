@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from decimal import Decimal
-from uuid import UUID, uuid4
+from uuid import UUID
 
 import httpx
 from fastapi import Depends, FastAPI, HTTPException, Query
@@ -95,8 +95,8 @@ def public_observations(
                  e.provenance_state
           FROM observations o
           JOIN evidence e ON e.id=o.evidence_id AND e.project_id=o.project_id
-          WHERE (:country IS NULL OR o.country_code=:country)
-            AND (:indicator IS NULL OR o.indicator_code=:indicator)
+          WHERE (CAST(:country AS text) IS NULL OR o.country_code=:country)
+            AND (CAST(:indicator AS text) IS NULL OR o.indicator_code=:indicator)
           ORDER BY o.country_code, o.indicator_code, o.period,
                    e.retrieved_at DESC, o.id DESC
         ) latest
