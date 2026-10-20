@@ -74,3 +74,37 @@ def store_snapshot(session: Session, snapshot: Snapshot, actor: str) -> tuple[st
         )
     append_audit(session, actor, "WORLD_BANK_SNAPSHOT_RECEIVED", str(inserted_id))
     return str(inserted_id), len(snapshot.observations), True
+
+def store_awards(session: Session, snapshot, actor: str) -> tuple[str, int, bool]:
+    """Preserve POST request and original official response; never create disbursements."""
+    pid = str(settings.project_id)
+    eid = str(uuid4())
+    query = json.dumps(snapshot.request, sort_keys=True, separators=(",", ":"))
+    inserted = session.execute(
+        text("INSERT INTO evidence "
+             "(id,project_id,provider,source_url,content_sha256,request_sha256,source_request,raw_bytes) "
+             "VALUES (:eid,:pid,'USA_SPENDING',:url,:sha,:rsha,CAST(:query AS jsonb),:raw) "
+             "ON CONFLICT (project_id,provider,content_sha256,request_sha256) DO NOTHING RETURNING id"),
+        {"eid": eid, "pid": pid, "url": snapshot.url, "sha": snapshot.sha256,
+         "rsha": snapshot.request_sha256, "query": query, "raw": snapshot.raw},
+    ).scalar_one_or_none()
+    if inserted is None:
+        existing = session.execute(
+            text("SELECT id FROM evidence WHERE project_id=:pid AND provider='USA_SPENDING' "
+                 "AND content_sha256=:sha AND request_sha256=:rsha"),
+            {"pid": pid, "sha": snapshot.sha256, "rsha": snapshot.request_sha256},
+        ).scalar_one()
+        return str(existing), 0, False
+    for award in snapshot.awards:
+        session.execute(
+            text("INSERT INTO public_awards "
+                 "(project_id,evidence_id,source_award_key,external_award_id,recipient_name,"
+                 "awarding_agency,funding_agency,award_amount,source_locator) "
+                 "VALUES (:pid,:eid,:source_key,:external,:recipient,:awarding,:funding,:amount,:locator)"),
+            {"pid": pid, "eid": str(inserted), "source_key": award.key,
+             "external": award.award_id, "recipient": award.recipient,
+             "awarding": award.awarding_agency, "funding": award.funding_agency,
+             "amount": award.amount, "locator": award.locator},
+        )
+    append_audit(session, actor, "USA_SPENDING_AWARDS_RECEIVED", str(inserted))
+    return str(inserted), len(snapshot.awards), True
