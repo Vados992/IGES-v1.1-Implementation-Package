@@ -4,7 +4,7 @@ Independent Geopolitical Evidence System. Evidence-centric research into public 
 
 ## Current state
 
-This repository contains an **executable, single-project controlled pilot**, not a certified public investigation platform. Initial real-data integration: World Bank Indicators API v2. Records are retained with raw response bytes, SHA-256 digests, API retrieval URLs, timestamps, and precise observation locators. No real records are fabricated or bundled.
+This repository contains an **executable, single-project controlled pilot**, not a certified public investigation platform. Real-data integrations: World Bank Indicators API v2 and USAspending.gov federal award search. Records are retained with raw response bytes, SHA-256 digests, API retrieval URLs, timestamps, and precise observation locators. No real records are fabricated or bundled.
 
 Capabilities:
 - PostgreSQL with row-level security (RLS), immutable evidence and financial event tables, ledger constraints, and an auditable change trail.
@@ -39,6 +39,15 @@ curl "http://127.0.0.1:8000/v1/public/observations?country=PRT&indicator=SP.POP.
 
 The command makes a **live** HTTPS request to the official World Bank V2 API and stores the original response and its hash. Network access is required at runtime. The retrieved data are marked `UNASSESSED`; they are facts *attributed to the source*, not independently verified truth. Data may have revisions and missing values.
 
+Financial-source import (public procurement award totals, **not disbursements**):
+
+```sh
+docker compose run --rm api python -m app.seed_usaspending --fiscal-year 2024 --limit 10
+curl http://127.0.0.1:8000/v1/public/awards
+```
+
+Only the selected search page is imported; do not treat the result as exhaustive financial records.
+
 Other allowlisted indicators: `NY.GDP.MKTP.CD` (GDP current US$) and `GC.DOD.TOTL.GD.ZS` (central government debt % GDP, where available). Indicator absence is reported rather than filled in.
 
 ## API
@@ -46,7 +55,9 @@ Other allowlisted indicators: `NY.GDP.MKTP.CD` (GDP current US$) and `GC.DOD.TOT
 - `GET /healthz`, `GET /readyz`
 - `GET /v1/public/observations?country=PRT&indicator=SP.POP.TOTL&limit=50`
 - `GET /v1/public/observations/{id}/provenance`
+- `GET /v1/public/awards`, `GET /v1/public/awards/{id}/provenance`
 - `POST /v1/admin/ingest/worldbank` (OIDC role `ingestor`)
+- `POST /v1/admin/ingest/usaspending` (OIDC role `ingestor`)
 - `POST /v1/admin/financial/events` (OIDC role `analyst`)
 - `POST /v1/admin/claims` (OIDC role `analyst`)
 - `POST /v1/admin/claims/{id}/reviews` (OIDC role `reviewer`)

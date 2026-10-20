@@ -56,3 +56,36 @@ async function load() {
 }
 document.querySelector("#filterForm").addEventListener("submit", (e) => {e.preventDefault(); load();});
 load();
+
+async function loadAwards() {
+  const rows=document.querySelector("#awardRows");
+  const el=document.querySelector("#awardStatus");
+  try {
+    const res=await fetch("/v1/public/awards?limit=30", {cache:"no-store"});
+    if(!res.ok)throw Error("HTTP " + res.status);
+    const payload=await res.json();
+    rows.replaceChildren();
+    if(!payload.records.length){
+      const tr=document.createElement("tr");cell(tr,"No award pages imported yet.");
+      for(let i=0;i<4;i++)cell(tr,"");rows.appendChild(tr);
+    }
+    for(const a of payload.records){
+      const row=document.createElement("tr");
+      cell(row,a.external_award_id||a.source_award_key);
+      cell(row,a.awarding_agency);
+      cell(row,a.recipient_name);
+      const amount=cell(row,a.award_amount===null?"Not reported":a.award_amount+" "+a.currency);
+      amount.className="value";
+      const linkCell=document.createElement("td");
+      const link=document.createElement("a");
+      link.href="/v1/public/awards/"+encodeURIComponent(a.id)+"/provenance";
+      link.textContent="Provenance"; link.target="_blank";link.rel="noopener noreferrer";
+      linkCell.appendChild(link);row.appendChild(linkCell);rows.appendChild(row);
+    }
+    el.textContent=payload.count+" award records";
+  }catch{
+    rows.replaceChildren();const tr=document.createElement("tr");cell(tr,"Award data service unavailable.");rows.appendChild(tr);
+    el.textContent="Unavailable";
+  }
+}
+loadAwards();
