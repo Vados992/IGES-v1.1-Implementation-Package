@@ -1,0 +1,23 @@
+# Controlled public-data-only deployment overlay.
+# Do not activate until legal/privacy review and backup controls are completed.
+services:
+  gateway:
+    image: caddy:2.9-alpine
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_started
+    environment:
+      IGES_DOMAIN: ${IGES_DOMAIN:?set DNS domain}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - iges_caddy_data:/data
+      - iges_caddy_config:/config
+    security_opt:
+      - no-new-privileges:true
+volumes:
+  iges_caddy_data:
+  iges_caddy_config:
