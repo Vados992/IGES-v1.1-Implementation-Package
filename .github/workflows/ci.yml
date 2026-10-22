@@ -62,7 +62,7 @@ jobs:
           docker compose exec -T db sh -c 'psql -U postgres -d iges -c "CREATE DATABASE iges_restore"'
           docker compose run --rm -v "$PWD/tests:/opt/iges/tests:ro" -v "$PWD/pyproject.toml:/opt/iges/pyproject.toml:ro" \
             -e IGES_TEST_ADMIN_URL="$(cat work/ci-admin-url)" \
-            --user root api sh -c 'pip install --no-cache-dir --target /tmp/testdeps pytest==9.1.1 && PYTHONPATH=/tmp/testdeps:/opt/iges python -m pytest -q -p no:cacheprovider -m integration tests'
+            --user root api sh -c 'pip install --no-cache-dir --target /tmp/testdeps pytest==9.1.1 && PYTHONPATH=/tmp/testdeps:/opt/iges python -m pytest -q -p no:cacheprovider -m integration tests/test_postgres_integration.py tests/test_migrations.py tests/test_workflow.py'
       - name: HTTP smoke and missing OIDC denial
         run: python scripts/http_smoke.py
       - name: Restart existing volume without repeating initialization

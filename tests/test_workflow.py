@@ -137,6 +137,9 @@ def test_document_claim_review_publication_correction(monkeypatch):
             original_bytes = manifest_response.content
             assert hashlib.sha256(original_bytes).hexdigest() == pub['manifest_hash']
             assert b'TEST_ANALYST' not in original_bytes
+            csv_export = client.get('/v1/public/publications/' + pub['id'] + '/claims.csv')
+            manifest = manifest_response.json()
+            assert hashlib.sha256(csv_export.content).hexdigest() == manifest['exports']['claims_csv_sha256']
             corrected = post(base + '/publications', publication | {'kind': 'CORRECTED', 'supersedes_id': pub['id'],
                 'reason': 'TEST FIXTURE: explanatory correction'}, rev)
             assert corrected['version'] == 2
@@ -155,3 +158,21 @@ def test_document_claim_review_publication_correction(monkeypatch):
                 assert session.execute(text('SELECT count(*) FROM publications WHERE case_id=:cid'), {'cid': cid}).scalar_one() == 2
     finally:
         app.dependency_overrides.clear()
+
+
+def test_workspace_contract_errors_and_language_resources():
+    with TestClient(app) as client:
+        response = client.get('/not-an-existing-route')
+        assert response.status_code == 404
+        assert response.headers['content-type'].startswith('application/problem+json')
+        assert response.json()['instance'].startswith('urn:uuid:')
+        assert response.headers['X-Request-ID']
+        assert client.get('/workspace').status_code == 200
+        assert client.get('/publication').status_code == 200
+        languages = client.get('/assets/workspace-i18n.json').json()
+        assert languages['en'].keys() == languages['ru'].keys()
+        assert languages['en']['fields'].keys() == languages['ru']['fields'].keys()
+        contract = client.get('/openapi.json').json()
+        assert contract['paths']['/v1/cases']['post']['security']
+        headers = contract['paths']['/v1/cases/{cid}/claims']['post']['parameters']
+        assert {h['name'] for h in headers} >= {'Idempotency-Key', 'If-Match'}

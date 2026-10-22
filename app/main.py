@@ -48,6 +48,18 @@ class RequestModel(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
 
+@app.get('/workspace', include_in_schema=False)
+def workspace():
+    return FileResponse(STATIC_DIR / 'workspace.html', headers={
+        'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"})
+
+
+@app.get('/publication', include_in_schema=False)
+def publication_reader():
+    return FileResponse(STATIC_DIR / 'publication.html', headers={
+        'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"})
+
+
 class IngestRequest(RequestModel):
     country: str = Field(min_length=3, max_length=3, pattern=r"^[A-Z]{3}$")
     indicator: str

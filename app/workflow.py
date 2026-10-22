@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import hashlib
+import csv
+import io
 import json
 import os
 from datetime import datetime, timedelta, timezone
@@ -166,8 +168,11 @@ def get_case(cid: UUID, user: dict = Depends(verified_identity)):
         case = access(session, cid, user)
         records = {}
         for table in sorted(TABLES):
-            cols = 'id,source_id,sha256,mime,size_bytes,doc_version,retrieved_at' if table == 'documents' else '*'
+            cols = ("id,source_id,sha256,mime,size_bytes,doc_version,retrieved_at,"
+                    "(SELECT status FROM document_processing p WHERE p.document_id=documents.id ORDER BY created_at DESC,id DESC LIMIT 1) AS processing_status,"
+                    "(SELECT receipt->>'mime' FROM document_processing p WHERE p.document_id=documents.id ORDER BY created_at DESC,id DESC LIMIT 1) AS detected_mime") if table == 'documents' else '*'
             records[table] = rows(session, f'SELECT {cols} FROM {table} WHERE case_id=:id ORDER BY id LIMIT 501', id=str(cid))  # noqa: S608 -- fixed TABLES allowlist  # nosec B608
+        records['publications'] = rows(session, 'SELECT id,version,revision,kind,supersedes_id,manifest_hash FROM publications WHERE case_id=:id ORDER BY version', id=str(cid))
         return jsonable_encoder({'id': cid, 'body': case['body'], 'case_revision': revision(session, cid),
                                  'records': records, 'record_limit': 500})
 
@@ -418,6 +423,16 @@ def response(cid: UUID, body: m.Response, writer: Writer = Depends()):
     return writer.run(cid, ['respondent'], body.model_dump(mode='json'), 'PARTY_RESPONSE_RECEIVED', add)
 
 
+def claims_csv(claims):
+    target = io.StringIO(newline='')
+    writer = csv.writer(target, lineterminator='\n')
+    writer.writerow(['id', 'exact_text', 'period_from', 'period_to', 'status'])
+    for claim in sorted(claims, key=lambda c: c['id']):
+        cells = [str(claim[key]) for key in ['id', 'exact_text', 'period_from', 'period_to', 'status']]
+        writer.writerow(["'" + cell if cell.startswith(('=', '+', '-', '@', '\t', '\r')) else cell for cell in cells])
+    return target.getvalue().encode('utf-8')
+
+
 def latest_gate(session, cid, rev, name):
     found = rows(session, 'SELECT * FROM publication_gates WHERE case_id=:cid AND revision=:rev AND gate=:gate '
                  'ORDER BY created_at DESC,id DESC LIMIT 1', cid=str(cid), rev=rev, gate=name)
@@ -483,6 +498,8 @@ def publish(cid: UUID, body: m.Publication, writer: Writer = Depends()):
                     'reply_disposition': reply_body, 'legal_review': {'decision': legal['decision'],
                      'legal_basis': legal['legal_basis'], 'privacy_assessment': legal['privacy_assessment']},
                     'meaning': 'Human-reviewed scoped findings; hashes establish integrity, not truth or legal guilt'}
+        manifest['exports'] = {'claims_csv_sha256': hashlib.sha256(claims_csv(conclusions)).hexdigest(),
+                               'encoding': 'UTF-8', 'line_endings': 'LF', 'spreadsheet_formula_protection': True}
         canon = canonical(manifest)
         sha = hashlib.sha256(canon.encode()).hexdigest()
         pid = insert(session, 'publications', cid, writer.user, None, version=version, revision=rev,
@@ -516,3 +533,16 @@ def audit(cid: UUID, user: dict = Depends(verified_identity), after: int = Query
         access(session, cid, user, ['editor', 'counsel'])
         return {'events': rows(session, 'SELECT revision,action,payload_sha256,created_at FROM case_events '
                                'WHERE case_id=:cid AND revision>:after ORDER BY revision LIMIT 100', cid=str(cid), after=after)}
+
+
+@router.get('/v1/public/publications/{pid}/claims.csv')
+def export_csv(pid: UUID):
+    with tenant_session(read_only=True) as session:
+        pub = one(session, 'SELECT canonical_manifest FROM publications WHERE id=:id', id=str(pid))
+        manifest = json.loads(pub['canonical_manifest'])
+        content = claims_csv(manifest['claims'])
+        sha = hashlib.sha256(content).hexdigest()
+        if sha != manifest['exports']['claims_csv_sha256']:
+            fail('EXPORT_INTEGRITY_FAILED', 503)
+        return HTTPResponse(content, media_type='text/csv; charset=utf-8', headers={
+            'Content-Disposition': f'attachment; filename="{pid}-claims.csv"', 'X-Content-SHA256': sha})
