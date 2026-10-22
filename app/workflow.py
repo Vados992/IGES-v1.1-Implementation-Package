@@ -15,7 +15,7 @@ from fastapi.responses import Response as HTTPResponse
 from sqlalchemy import text
 from starlette.concurrency import run_in_threadpool
 
-from app.auth import verified_identity, https_endpoint
+from app.auth import verified_identity, https_endpoint, require_role
 from app.database import tenant_session
 from app.persistence import append_audit
 from app.config import settings
@@ -24,7 +24,7 @@ from app.record_integrity import seal
 
 router = APIRouter(tags=['Evidence workspace'])
 TABLES = {'claims', 'hypotheses', 'sources', 'documents', 'evidence_items', 'entities',
-          'relationships', 'review_assignments', 'assessments', 'publication_gates', 'responses'}
+          'relationships', 'entity_resolutions', 'case_revisions', 'case_member_revocations', 'review_assignments', 'assessments', 'publication_gates', 'responses'}
 
 
 def canonical(value):
@@ -58,13 +58,19 @@ def revision(session, cid):
 
 def access(session, cid, user, roles=None):
     case = one(session, 'SELECT * FROM cases WHERE id=:id', id=str(cid))
-    memberships = rows(session, 'SELECT role FROM case_members WHERE case_id=:id AND subject=:sub',
+    memberships = rows(session, 'SELECT role FROM case_members m WHERE case_id=:id AND subject=:sub '
+                       'AND NOT EXISTS(SELECT 1 FROM case_member_revocations r WHERE r.member_id=m.id)',
                        id=str(cid), sub=user['sub'])
     case_roles = {r['role'] for r in memberships}
     if not case_roles:
         fail('CASE_NOT_FOUND', 404)
+    if not case_roles & set(user.get('roles', [])):
+        fail('CURRENT_IDENTITY_ROLE_REQUIRED', 403)
     if roles and not (case_roles & set(roles) & set(user.get('roles', []))):
         fail('CASE_ROLE_DENIED', 403)
+    amendments = rows(session, 'SELECT body FROM case_revisions WHERE case_id=:id ORDER BY created_at DESC,id DESC LIMIT 1', id=str(cid))
+    if amendments:
+        case['body'] = amendments[0]['body']
     return case
 
 
@@ -80,7 +86,7 @@ def insert(session, table, cid, user, body, **fields):
         values['body'] = canonical(body)
     cols = list(values)
     parameters = ','.join('CAST(:body AS jsonb)' if c == 'body' else
-                          'CAST(:receipt AS jsonb)' if c == 'receipt' else ':' + c for c in cols)
+                          f'CAST(:{c} AS jsonb)' if c in {'receipt', 'locator'} else ':' + c for c in cols)
     stored = session.execute(text(f"INSERT INTO {table} ({','.join(cols)}) VALUES ({parameters}) RETURNING *"), values).mappings().one()  # noqa: S608  # nosec B608
     seal(session, table, dict(stored))
     return values['id']
@@ -156,10 +162,11 @@ def create_case(body: m.Case, writer: Writer = Depends()):
 @router.get('/v1/cases')
 def list_cases(user: dict = Depends(verified_identity), limit: int = Query(50, ge=1, le=100), cursor: UUID | None = None):
     with tenant_session(read_only=True) as session:
-        return {'records': rows(session, 'SELECT id,body,created_at FROM cases c WHERE EXISTS '
-                                '(SELECT 1 FROM case_members m WHERE m.case_id=c.id AND m.subject=:sub) '
+        return {'records': rows(session, 'SELECT id,coalesce((SELECT body FROM case_revisions cr WHERE cr.case_id=c.id ORDER BY created_at DESC,id DESC LIMIT 1),c.body) AS body,created_at FROM cases c WHERE EXISTS '
+                                '(SELECT 1 FROM case_members m WHERE m.case_id=c.id AND m.subject=:sub AND m.role=ANY(:roles) '
+                                'AND NOT EXISTS(SELECT 1 FROM case_member_revocations r WHERE r.member_id=m.id)) '
                                 'AND (CAST(:cursor AS uuid) IS NULL OR c.id>CAST(:cursor AS uuid)) ORDER BY c.id LIMIT :limit',
-                                sub=user['sub'], cursor=str(cursor) if cursor else None, limit=limit)}
+                                sub=user['sub'], roles=user.get('roles', []), cursor=str(cursor) if cursor else None, limit=limit)}
 
 
 @router.get('/v1/cases/{cid}')
@@ -183,8 +190,23 @@ def add_member(cid: UUID, body: m.Member, writer: Writer = Depends()):
         case = one(session, 'SELECT created_by FROM cases WHERE id=:id', id=str(cid))
         if case['created_by'] != writer.user['sub']:
             fail('ONLY_CASE_OWNER_CAN_GRANT_MEMBERSHIP', 403)
+        if rows(session, 'SELECT id FROM case_members m WHERE case_id=:cid AND subject=:sub AND role=:role '
+                'AND NOT EXISTS(SELECT 1 FROM case_member_revocations r WHERE r.member_id=m.id)',
+                cid=str(cid), sub=body.subject, role=body.role):
+            fail('MEMBERSHIP_ALREADY_ACTIVE')
         return {'id': insert(session, 'case_members', cid, writer.user, None, **body.model_dump())}
     return writer.run(cid, ['analyst', 'editor'], body.model_dump(), 'CASE_MEMBER_GRANTED', add, content=False)
+
+
+@router.post('/v1/cases/{cid}/member-revocations', status_code=201)
+def revoke_member(cid: UUID, body: m.MemberRevocation, writer: Writer = Depends()):
+    def revoke(session, rev):
+        case = one(session, 'SELECT created_by FROM cases WHERE id=:id', id=str(cid))
+        if case['created_by'] != writer.user['sub']:
+            fail('ONLY_CASE_OWNER_CAN_REVOKE_MEMBERSHIP', 403)
+        one(session, 'SELECT id FROM case_members WHERE id=:id AND case_id=:cid', id=str(body.member_id), cid=str(cid))
+        return {'id': insert(session, 'case_member_revocations', cid, writer.user, body.model_dump(mode='json'), member_id=str(body.member_id))}
+    return writer.run(cid, ['analyst', 'editor'], body.model_dump(mode='json'), 'CASE_MEMBER_REVOKED', revoke, content=False)
 
 
 def create_record(cid, body, writer, table, fields=None):
@@ -194,6 +216,8 @@ def create_record(cid, body, writer, table, fields=None):
         if table == 'claims':
             if body.supersedes_id:
                 one(session, 'SELECT id FROM claims WHERE id=:id AND case_id=:cid', id=str(body.supersedes_id), cid=str(cid))
+                if not rows(session, "SELECT id FROM assessments WHERE claim_id=:id AND status='WITHDRAWN_CORRECTED'", id=str(body.supersedes_id)):
+                    fail('WITHDRAW_PRIOR_CLAIM_BEFORE_SUPERSEDING')
             extra.update(statement=body.exact_text, submitted_by=writer.user['sub'])
         if table == 'sources' and not https_endpoint(body.url):
             fail('SOURCE_HTTPS_REQUIRED', 422)
@@ -206,6 +230,11 @@ def create_record(cid, body, writer, table, fields=None):
 @router.post('/v1/cases/{cid}/claims', status_code=201)
 def create_claim(cid: UUID, body: m.Claim, writer: Writer = Depends()):
     return create_record(cid, body, writer, 'claims')
+
+
+@router.post('/v1/cases/{cid}/case-revisions', status_code=201)
+def amend_case(cid: UUID, body: m.CaseRevision, writer: Writer = Depends()):
+    return create_record(cid, body, writer, 'case_revisions')
 
 
 @router.post('/v1/cases/{cid}/hypotheses', status_code=201)
@@ -233,7 +262,51 @@ def create_relationship(cid: UUID, body: m.Relationship, writer: Writer = Depend
     return create_record(cid, body, writer, 'relationships', ['subject_id', 'object_id', 'evidence_id'])
 
 
-@router.post('/v1/cases/{cid}/documents', status_code=201)
+@router.post('/v1/cases/{cid}/entity-resolutions', status_code=201)
+def resolve_entity(cid: UUID, body: m.EntityResolution, writer: Writer = Depends()):
+    def add(session, rev):
+        if body.subject_id == body.object_id:
+            fail('ENTITY_CANNOT_MERGE_WITH_ITSELF', 422)
+        for eid in [body.subject_id, body.object_id]:
+            one(session, 'SELECT id FROM entities WHERE id=:id AND case_id=:cid', id=str(eid), cid=str(cid))
+        prior = rows(session, 'SELECT DISTINCT ON(subject_id) id,subject_id,object_id,body FROM entity_resolutions '
+                     'WHERE case_id=:cid ORDER BY subject_id,created_at DESC,id DESC', cid=str(cid))
+        own = next((r for r in prior if str(r['subject_id']) == str(body.subject_id)), None)
+        if body.action == 'UNDO_MERGE':
+            if not own or own['body']['action'] != 'MERGE_ALIAS' or str(own['id']) != str(body.reverses_id) or own['object_id'] != body.object_id:
+                fail('UNDO_MUST_REFERENCE_ACTIVE_MERGE')
+        else:
+            if body.reverses_id or (own and own['body']['action'] == 'MERGE_ALIAS'):
+                fail('UNDO_ACTIVE_MERGE_BEFORE_REASSIGNING')
+            edges = {str(r['subject_id']): str(r['object_id']) for r in prior if r['body']['action'] == 'MERGE_ALIAS'}
+            cursor, visited = str(body.object_id), {str(body.subject_id)}
+            while cursor:
+                if cursor in visited:
+                    fail('ENTITY_ALIAS_CYCLE_FORBIDDEN')
+                visited.add(cursor)
+                cursor = edges.get(cursor)
+        return {'id': insert(session, 'entity_resolutions', cid, writer.user, body.model_dump(mode='json'),
+                             subject_id=str(body.subject_id), object_id=str(body.object_id), evidence_id=str(body.evidence_id))}
+    return writer.run(cid, ['analyst', 'editor'], body.model_dump(mode='json'), 'ENTITY_RESOLUTION_RECORDED', add)
+
+
+@router.post('/v1/cases/{cid}/claims/{claim_id}/withdrawal', status_code=201)
+def withdraw_claim(cid: UUID, claim_id: UUID, body: m.Withdrawal, writer: Writer = Depends()):
+    def add(session, rev):
+        claim = one(session, 'SELECT submitted_by FROM claims WHERE id=:id AND case_id=:cid', id=str(claim_id), cid=str(cid))
+        if claim['submitted_by'] != writer.user['sub']:
+            fail('ONLY_AUTHOR_CAN_USE_AUTHOR_WITHDRAWAL', 403)
+        if rows(session, "SELECT id FROM assessments WHERE claim_id=:id AND status='WITHDRAWN_CORRECTED'", id=str(claim_id)):
+            fail('CLAIM_ALREADY_WITHDRAWN')
+        payload = {**body.model_dump(), 'author_withdrawal': True,
+                   'limitations': 'Withdrawn by the author; no substantive finding is implied.'}
+        return {'id': insert(session, 'assessments', cid, writer.user, payload, claim_id=str(claim_id),
+                             revision=rev, status='WITHDRAWN_CORRECTED')}
+    return writer.run(cid, ['analyst', 'editor'], body.model_dump(), 'AUTHOR_WITHDREW_CLAIM', add)
+
+
+@router.post('/v1/cases/{cid}/documents', status_code=201, openapi_extra={
+    'requestBody': {'required': True, 'content': {'application/octet-stream': {'schema': {'type': 'string', 'format': 'binary'}}}}})
 async def upload_document(cid: UUID, source_id: UUID, request: Request, writer: Writer = Depends()):
     raw = await request.body()
     if not raw or len(raw) > 8388608:
@@ -270,7 +343,7 @@ def original(cid: UUID, did: UUID, user: dict = Depends(verified_identity)):
         append_audit(session, user['sub'], 'ORIGINAL_ACCESSED', str(did))
         return HTTPResponse(bytes(doc['raw_bytes']), media_type='application/octet-stream',
                             headers={'Content-Disposition': f'attachment; filename="{did}.original"',
-                                     'Digest': 'sha-256=' + doc['sha256']})
+                                     'X-Content-SHA256': doc['sha256'], 'ETag': '"' + doc['sha256'] + '"'})
 
 
 @router.get('/v1/cases/{cid}/documents/{did}/pages')
@@ -278,7 +351,7 @@ def pages(cid: UUID, did: UUID, user: dict = Depends(verified_identity)):
     with tenant_session(read_only=True) as session:
         access(session, cid, user)
         one(session, 'SELECT id FROM documents WHERE id=:id AND case_id=:cid', id=str(did), cid=str(cid))
-        return {'pages': rows(session, 'SELECT page,text_content,confidence,method,content_sha256 FROM document_pages '
+        return {'pages': rows(session, 'SELECT page,text_content,confidence,method,locator,content_sha256 FROM document_pages '
                               'WHERE document_id=:id ORDER BY page', id=str(did)),
                 'processing': rows(session, 'SELECT status,receipt,created_at FROM document_processing WHERE document_id=:id '
                                    'ORDER BY created_at DESC LIMIT 1', id=str(did))}
@@ -377,6 +450,12 @@ def assess(cid: UUID, body: m.Assessment, writer: Writer = Depends()):
                        id=str(body.claim_id))
         if retired:
             fail('WITHDRAWAL_IS_IRREVERSIBLE_CREATE_SUPERSEDING_CLAIM')
+        previous = rows(session, 'SELECT status,revision FROM assessments WHERE claim_id=:id AND created_by=:actor ORDER BY revision DESC,created_at DESC LIMIT 1', id=str(body.claim_id), actor=writer.user['sub'])
+        if previous and previous[0]['status'] != body.status and body.status != 'WITHDRAWN_CORRECTED':
+            fresh = rows(session, "SELECT id FROM case_events WHERE case_id=:cid AND revision>:rev AND action='EVIDENCE_ITEMS_CREATED' AND payload->'request'->>'claim_id'=:claim",
+                         cid=str(cid), rev=previous[0]['revision'], claim=str(body.claim_id))
+            if not fresh:
+                fail('NEW_EVIDENCE_REQUIRED_FOR_CHANGED_ASSESSMENT')
         return {'id': insert(session, 'assessments', cid, writer.user, body.model_dump(mode='json'),
                              claim_id=str(body.claim_id), revision=rev, status=body.status)}
     return writer.run(cid, ['reviewer'], body.model_dump(mode='json'), 'CLAIM_ASSESSED', add, content=False)
@@ -486,12 +565,14 @@ def publish(cid: UUID, body: m.Publication, writer: Writer = Depends()):
         docs = rows(session, 'SELECT id,source_id,sha256,size_bytes,doc_version FROM documents WHERE case_id=:cid ORDER BY id', cid=str(cid))
         for doc in docs:
             verify_document(session, cid, doc['id'])
+            doc['extraction'] = rows(session, 'SELECT page,content_sha256,confidence,method,locator FROM document_pages WHERE document_id=:id ORDER BY page', id=doc['id'])
+            doc['processing'] = one(session, "SELECT receipt FROM document_processing WHERE document_id=:id AND status='READY' ORDER BY created_at DESC LIMIT 1", id=doc['id'])['receipt']
         public_records = {}
-        for table in ['hypotheses', 'sources', 'evidence_items', 'entities', 'relationships']:
+        for table in ['hypotheses', 'sources', 'evidence_items', 'entities', 'relationships', 'entity_resolutions']:
             public_records[table] = rows(session, f'SELECT id,body FROM {table} WHERE case_id=:cid ORDER BY id', cid=str(cid))  # noqa: S608 -- fixed internal list  # nosec B608
         version = previous[0]['version'] + 1 if previous else 1
         manifest = {'schema': 'iges-publication/1', 'case_id': str(cid), 'version': version, 'revision': rev,
-                    'case': one(session, 'SELECT body FROM cases WHERE id=:id', id=str(cid))['body'],
+                    'case': access(session, cid, writer.user)['body'],
                     'kind': body.kind, 'reason': body.reason, 'supersedes_id': body.supersedes_id,
                     'methodology_version': body.methodology_version, 'methodology': body.methodology,
                     'claims': conclusions, 'documents': docs, 'records': public_records, 'responses': responses,
@@ -500,6 +581,7 @@ def publish(cid: UUID, body: m.Publication, writer: Writer = Depends()):
                     'meaning': 'Human-reviewed scoped findings; hashes establish integrity, not truth or legal guilt'}
         manifest['exports'] = {'claims_csv_sha256': hashlib.sha256(claims_csv(conclusions)).hexdigest(),
                                'encoding': 'UTF-8', 'line_endings': 'LF', 'spreadsheet_formula_protection': True}
+        manifest['case_revision_sha256'] = one(session, 'SELECT payload_sha256 FROM case_events WHERE case_id=:cid AND revision=:rev', cid=str(cid), rev=rev)['payload_sha256']
         canon = canonical(manifest)
         sha = hashlib.sha256(canon.encode()).hexdigest()
         pid = insert(session, 'publications', cid, writer.user, None, version=version, revision=rev,
@@ -514,8 +596,13 @@ def publish(cid: UUID, body: m.Publication, writer: Writer = Depends()):
 @router.get('/v1/public/cases/{cid}/publications')
 def public_history(cid: UUID):
     with tenant_session(read_only=True) as session:
-        return {'records': rows(session, 'SELECT id,version,kind,supersedes_id,manifest_hash,created_at FROM publications '
-                                'WHERE case_id=:cid ORDER BY version', cid=str(cid))}
+        history = rows(session, 'SELECT id,version,kind,supersedes_id,manifest_hash,created_at FROM publications '
+                       'WHERE case_id=:cid ORDER BY version', cid=str(cid))
+        for record in history:
+            successor = next((r for r in history if r['supersedes_id'] == record['id']), None)
+            record['superseded_by'] = successor['id'] if successor else None
+            record['current'] = successor is None
+        return {'records': history}
 
 
 @router.get('/v1/public/publications/{pid}/manifest')
@@ -546,3 +633,25 @@ def export_csv(pid: UUID):
             fail('EXPORT_INTEGRITY_FAILED', 503)
         return HTTPResponse(content, media_type='text/csv; charset=utf-8', headers={
             'Content-Disposition': f'attachment; filename="{pid}-claims.csv"', 'X-Content-SHA256': sha})
+
+
+@router.get('/v1/admin/audit')
+def project_audit(user: dict = Depends(require_role('administrator')), after: int = Query(0, ge=0)):
+    with tenant_session(read_only=True) as session:
+        return {'events': rows(session, 'SELECT sequence,id,actor_sub,action,subject_id,occurred_at,previous_hash,'
+                               'entry_hash,canonical_payload FROM audit_events WHERE sequence>:after ORDER BY sequence LIMIT 100',
+                               after=after)}
+
+
+@router.get('/v1/cases/{cid}/records/{collection}')
+def page_records(cid: UUID, collection: str, user: dict = Depends(verified_identity),
+                 cursor: UUID | None = None, limit: int = Query(100, ge=1, le=100)):
+    if collection not in TABLES:
+        fail('COLLECTION_NOT_FOUND', 404)
+    with tenant_session(read_only=True) as session:
+        access(session, cid, user)
+        cols = 'id,source_id,sha256,mime,size_bytes,doc_version,retrieved_at' if collection == 'documents' else '*'
+        found = rows(session, f'SELECT {cols} FROM {collection} WHERE case_id=:cid '  # noqa: S608  # nosec B608
+                     'AND (CAST(:cursor AS uuid) IS NULL OR id>CAST(:cursor AS uuid)) ORDER BY id LIMIT :limit',
+                     cid=str(cid), cursor=str(cursor) if cursor else None, limit=limit)
+        return {'records': found, 'next_cursor': str(found[-1]['id']) if len(found) == limit else None}

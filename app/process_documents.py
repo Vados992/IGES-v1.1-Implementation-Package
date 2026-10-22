@@ -70,6 +70,8 @@ def process_once():
                     insert(session, 'document_pages', doc['case_id'], actor, None,
                            document_id=str(doc['id']), page=number, text_content=page['text'],
                            confidence=page['confidence'], method=page['method'],
+                           locator=json.dumps({'archive_member': page.get('member'),
+                                               'page_kind': 'physical' if page['method'] in {'pdf-text', 'tesseract-tsv'} else 'logical'}),
                            content_sha256=hashlib.sha256(page['text'].encode()).hexdigest())
             insert(session, 'document_processing', doc['case_id'], actor, None,
                    document_id=str(doc['id']), status=status, receipt=json.dumps(receipt))

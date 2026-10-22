@@ -10,7 +10,7 @@ from app.persistence import append_audit
 
 SEALED_TABLES = {'cases', 'case_members', 'claims', 'hypotheses', 'sources', 'documents', 'document_pages',
                  'document_processing', 'evidence_items', 'entities', 'relationships', 'review_assignments',
-                 'assessments', 'publication_gates', 'responses', 'publications'}
+                 'assessments', 'publication_gates', 'responses', 'publications', 'entity_resolutions', 'case_revisions', 'case_member_revocations'}
 
 
 def normalize(values):
@@ -18,7 +18,7 @@ def normalize(values):
     for key, value in values.items():
         if isinstance(value, (bytes, memoryview)):
             value = {'bytes_sha256': hashlib.sha256(bytes(value)).hexdigest()}
-        elif key in {'body', 'receipt'} and isinstance(value, str):
+        elif key in {'body', 'receipt', 'locator'} and isinstance(value, str):
             value = json.loads(value)
         normalized[key] = jsonable_encoder(value)
     return normalized

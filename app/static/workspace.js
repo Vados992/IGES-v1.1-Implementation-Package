@@ -5,17 +5,17 @@ const t = key => strings[locale]?.[key] || strings.en?.[key] || key;
 const fieldName = key => strings[locale]?.fields[key] || strings.en?.fields[key] || key.replaceAll('_', ' ');
 const tabs = ['claims', 'documents', 'evidence', 'graph', 'review', 'legal', 'publication'];
 const actions = {
-  claims: [['createClaim', 'Claim', 'claims'], ['createHypothesis', 'Hypothesis', 'hypotheses']],
+  claims: [['createClaim', 'Claim', 'claims'], ['createHypothesis', 'Hypothesis', 'hypotheses'], ['withdraw','Withdrawal','claim-withdrawal'], ['amendCase','CaseRevision','case-revisions']],
   documents: [['createSource', 'Source', 'sources'], ['upload', null, 'documents']],
   evidence: [['createEvidence', 'EvidenceItem', 'evidence-items']],
-  graph: [['createEntity', 'Entity', 'entities'], ['createRelationship', 'Relationship', 'relationships']],
-  review: [['assign', 'Assignment', 'review-assignments'], ['assess', 'Assessment', 'assessments'], ['member', 'Member', 'members']],
+  graph: [['createEntity', 'Entity', 'entities'], ['createRelationship', 'Relationship', 'relationships'], ['resolveEntity','EntityResolution','entity-resolutions']],
+  review: [['assign', 'Assignment', 'review-assignments'], ['assess', 'Assessment', 'assessments'], ['member', 'Member', 'members'], ['revokeMember','MemberRevocation','member-revocations']],
   legal: [['legalGate', 'LegalGate', 'legal-privacy'], ['replyGate', 'ReplyGate', 'reply-window'],
           ['panelGate', 'PanelGate', 'panel'], ['partyResponse', 'Response', 'responses']],
   publication: [['publish', 'Publication', 'publications']]
 };
 const tableTabs = {claims: ['claims','hypotheses'], documents:['sources','documents'], evidence:['evidence_items'],
-  graph:['entities','relationships'], review:['review_assignments','assessments'], legal:['publication_gates','responses'], publication:['publications']};
+  graph:['entities','relationships','entity_resolutions'], review:['review_assignments','assessments'], legal:['publication_gates','responses'], publication:['publications']};
 
 function element(tag, value, className) {
   const node = document.createElement(tag);
@@ -149,12 +149,13 @@ function buildForm(action, holder, isNewCase = false) {
   const form = element('form'), controls = [];
   if (model === 'LegalGate' || model === 'Assessment' || model === 'Publication') form.append(element('p', t('noApproval'), 'full field-help'));
   const schema = model ? specification.components.schemas[model] : {properties: {source_id:{type:'string',format:'uuid'},file:{type:'file'}}, required:['source_id','file']};
-  for (const [name, raw] of Object.entries(schema.properties)) {
+  const fields = model === 'Withdrawal' ? {claim_id:{type:'string',format:'uuid'},...schema.properties} : schema.properties;
+  for (const [name, raw] of Object.entries(fields)) {
     const prop = raw.anyOf ? raw.anyOf.find(option => option.type !== 'null') : raw;
     if (prop.const !== undefined && prop.const !== true) continue;
-    const required = schema.required?.includes(name), wrapper = element('label'); wrapper.append(element('span', name === 'file' ? t('file') : fieldName(name)));
+    const required = (model === 'Withdrawal' && name === 'claim_id') || schema.required?.includes(name), wrapper = element('label'); wrapper.append(element('span', name === 'file' ? t('file') : fieldName(name)));
     let input, kind = prop.type;
-    const refs = {claim_id:'claims',document_id:'documents',evidence_id:'evidence_items',request_evidence_id:'evidence_items',source_id:'sources',subject_id:'entities',object_id:'entities',supersedes_id:model === 'Claim' ? 'claims' : 'publications'};
+    const refs = {claim_id:'claims',document_id:'documents',evidence_id:'evidence_items',request_evidence_id:'evidence_items',source_id:'sources',reverses_id:'entity_resolutions',subject_id:'entities',object_id:'entities',supersedes_id:model === 'Claim' ? 'claims' : 'publications'};
     if (refs[name] && current) {
       input = element('select'); const blank = element('option', t('choose')); blank.value = ''; input.append(blank);
       for (const record of current.records[refs[name]] || []) {
@@ -169,7 +170,7 @@ function buildForm(action, holder, isNewCase = false) {
       input = element('textarea'); wrapper.classList.add('full');
       if (kind === 'array' || kind === 'object') wrapper.append(element('span', t(kind === 'array' ? 'lineList' : 'pairList'), 'field-help'));
     } else { input = element('input'); input.type = prop.format === 'date' ? 'date' : prop.format === 'date-time' ? 'datetime-local' : kind === 'integer' ? 'number' : 'text'; }
-    input.name = name; input.required = !!required && (kind !== 'boolean' || prop.const === true);
+    input.name = name; input.setAttribute('aria-label', name === 'file' ? t('file') : fieldName(name)); input.required = !!required && (kind !== 'boolean' || prop.const === true);
     if (prop.minLength) input.minLength = prop.minLength;
     if (prop.maxLength) input.maxLength = prop.maxLength;
     if (prop.minimum !== undefined) input.min = prop.minimum;
@@ -178,6 +179,7 @@ function buildForm(action, holder, isNewCase = false) {
   }
   const submit = element('button', t('save')); submit.type = 'submit'; form.append(submit);
   let attempt = null;
+  form.addEventListener('input', () => { attempt = null; });
   form.addEventListener('submit', async event => {
     event.preventDefault(); submit.disabled = true;
     try {
@@ -199,7 +201,7 @@ function buildForm(action, holder, isNewCase = false) {
         const file = controls.find(item => item.kind === 'file').input.files[0];
         if (!file || file.size > 8388608) throw new Error(t('file'));
         result = await write('/documents?source_id=' + body.source_id, file, attempt.key, false, true);
-      } else result = await write('/' + endpoint, body, attempt.key, isNewCase);
+      } else if (model === 'Withdrawal') { const claim = body.claim_id; delete body.claim_id; result = await write('/claims/' + claim + '/withdrawal', body, attempt.key); } else result = await write('/' + endpoint, body, attempt.key, isNewCase);
       attempt = null; await openCase(isNewCase ? result.id : current.id); message(t('saved'));
     } catch (error) { showError(error); } finally { submit.disabled = false; }
   }); holder.append(form);

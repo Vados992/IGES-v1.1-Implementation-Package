@@ -37,6 +37,10 @@ class Claim(Period):
     supersedes_id: UUID | None = None
 
 
+class CaseRevision(Case):
+    rationale: str = Field(min_length=20, max_length=5000)
+
+
 class Hypothesis(Record):
     claim_id: UUID
     statement: str = Field(min_length=10, max_length=5000)
@@ -86,6 +90,20 @@ class Relationship(Period):
                        'met_with', 'contracted_with', 'lobbied', 'decided', 'implemented', 'cites',
                        'derived_from', 'supersedes', 'responds_to']
     limitations: str = Field(min_length=10, max_length=5000)
+    status: Literal['PROPOSED'] = 'PROPOSED'
+
+
+class EntityResolution(Record):
+    subject_id: UUID
+    object_id: UUID
+    evidence_id: UUID
+    action: Literal['MERGE_ALIAS', 'UNDO_MERGE']
+    rationale: str = Field(min_length=20, max_length=5000)
+    reverses_id: UUID | None = None
+
+
+class Withdrawal(Record):
+    rationale: str = Field(min_length=20, max_length=5000)
 
 
 class Member(Record):
@@ -96,6 +114,11 @@ class Member(Record):
 class Assignment(Record):
     claim_id: UUID
     reviewer_sub: str = Field(min_length=1, max_length=255)
+
+
+class MemberRevocation(Record):
+    member_id: UUID
+    rationale: str = Field(min_length=20, max_length=5000)
 
 
 class Assessment(Record):

@@ -79,6 +79,9 @@ def verified_identity(
             raise HTTPException(status_code=401, detail="INVALID_TOKEN")
         if str(payload.get("project_id", "")) != str(settings.project_id):
             raise HTTPException(status_code=403, detail="PROJECT_DENIED")
+        roles = payload.get('roles', [])
+        if not isinstance(roles, list) or len(roles) > 50 or any(not isinstance(role, str) or len(role) > 100 for role in roles):
+            raise HTTPException(status_code=403, detail='INVALID_ROLE_CLAIMS')
         verify_mfa(payload)
         return payload
     except HTTPException:

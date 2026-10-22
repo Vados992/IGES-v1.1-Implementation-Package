@@ -164,8 +164,14 @@ def test_direct_sql_cannot_bypass_financial_return_limit(client, evidence):
 
 
 def test_two_person_review_enforced_in_api_and_database(client, evidence):
-    claim = client.post("/v1/admin/claims", json={"evidence_id": evidence,
-                                               "statement": "Controlled integration test claim"}).json()["claim_id"]
+    assert client.post('/v1/admin/claims', json={'evidence_id': evidence,
+                                              'statement': 'Controlled integration test claim'}).status_code == 410
+    # Preserve verification of historical review constraints without creating new unscoped claims via the API.
+    with tenant_session() as session:
+        claim = str(session.execute(text("INSERT INTO claims(project_id,evidence_id,statement,submitted_by) "
+                           "VALUES(:pid,:eid,'EXPLICIT LEGACY TEST FIXTURE','integration-author') RETURNING id"),
+                       {'pid': str(settings.project_id), 'eid': evidence}).scalar_one())
+        append_audit(session, 'INTEGRATION_FIXTURE', 'LEGACY_TEST_CLAIM', claim)
     review = {"verdict": "SUPPORT", "rationale": "Integration fixture rationale with sufficient length"}
     assert client.post(f"/v1/admin/claims/{claim}/reviews", json=review).status_code == 403
     with pytest.raises(DBAPIError), tenant_session() as session:

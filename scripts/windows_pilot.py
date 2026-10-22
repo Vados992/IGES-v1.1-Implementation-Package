@@ -76,7 +76,7 @@ def realm(config):
         "ssoSessionMaxLifespan": 3600, "eventsEnabled": True, "eventsExpiration": 604800,
         "adminEventsEnabled": True, "adminEventsDetailsEnabled": False,
         "passwordPolicy": "length(16) and notUsername and notEmail",
-        "roles": {"realm": [{"name": role} for role in ["analyst", "reviewer", "ingestor", "editor", "counsel", "panel", "respondent"]]},
+        "roles": {"realm": [{"name": role} for role in ["analyst", "reviewer", "ingestor", "editor", "counsel", "panel", "respondent", "reader", "administrator"]]},
         "browserFlow": "iges-mfa", "authenticationFlows": [
             {"alias": "iges-mfa", "providerId": "basic-flow", "topLevel": True, "builtIn": False,
              "authenticationExecutions": [
@@ -206,7 +206,7 @@ def start():
             client.get("https://localhost:8444/readyz").raise_for_status()
         except httpx.HTTPError:
             process = subprocess.Popen([sys.executable, "-m", "uvicorn", "app.main:app", "--host", "127.0.0.1",  # noqa: S603
-                "--port", "8444", "--ssl-certfile", str(STATE / "server.pem"), "--ssl-keyfile", str(STATE / "server-key.pem")],
+                "--port", "8444", "--no-access-log", "--ssl-certfile", str(STATE / "server.pem"), "--ssl-keyfile", str(STATE / "server-key.pem")],
                 cwd=REPO, env=environment(), creationflags=FLAGS, stdout=(ROOT / "api.log").open("a"), stderr=subprocess.STDOUT)
             (STATE / "api.pid").write_text(str(process.pid))
         for _ in range(30):

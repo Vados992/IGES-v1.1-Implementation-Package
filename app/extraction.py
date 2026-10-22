@@ -91,7 +91,9 @@ def ocr(path):
     return {'text': text, 'confidence': round(confidence, 4), 'method': 'tesseract-tsv'}
 
 
-def extract(raw, depth=0):
+def extract(raw, depth=0, budget=None):
+    if budget is None:
+        budget = {'expanded': 0, 'text': 0, 'pages': 0}
     if not raw or len(raw) > MAX_FILE or depth > 2:
         raise ValueError('FILE_OR_ARCHIVE_DEPTH_LIMIT')
     pages = []
@@ -115,6 +117,9 @@ def extract(raw, depth=0):
         mime = 'application/pdf'
     elif raw.startswith(b'PK\x03\x04'):
         archive, members = archive_members(raw)
+        budget['expanded'] += sum(member.file_size for member in members)
+        if budget['expanded'] > MAX_EXPANDED:
+            raise ValueError('AGGREGATE_ARCHIVE_EXPANSION_LIMIT')
         with archive:
             names = {x.filename for x in members}
             if 'word/document.xml' in names and '[Content_Types].xml' in names:
@@ -127,16 +132,25 @@ def extract(raw, depth=0):
                 mime = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
             else:
                 for member in members:
-                    nested = extract(archive.read(member), depth + 1)
+                    nested = extract(archive.read(member), depth + 1, budget)
                     for page in nested['pages']:
-                        page['member'] = member.filename
+                        page['member'] = member.filename + ('!/' + page['member'] if page.get('member') else '')
                         pages.append(page)
                 mime = 'application/zip'
     elif raw.startswith((b'\x89PNG\r\n\x1a\n', b'\xff\xd8\xff', b'II*\0', b'MM\0*')):
+        from PIL import Image
+        Image.MAX_IMAGE_PIXELS = 20_000_000
         with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / 'image'
-            path.write_bytes(raw)
-            pages = [ocr(path)]
+            with Image.open(io.BytesIO(raw)) as source:
+                if getattr(source, 'n_frames', 1) > MAX_PAGES:
+                    raise ValueError('IMAGE_FRAME_LIMIT')
+                for index in range(getattr(source, 'n_frames', 1)):
+                    source.seek(index)
+                    if source.width * source.height > 20_000_000:
+                        raise ValueError('IMAGE_PIXEL_LIMIT')
+                    path = Path(directory) / f'frame-{index + 1}.png'
+                    source.convert('RGB').save(path)
+                    pages.append(ocr(path))
         mime = 'image/ocr-source'
     else:
         content = raw.decode('utf-8-sig')
@@ -155,7 +169,10 @@ def extract(raw, depth=0):
         else:
             mime = 'text/csv' if ',' in content.split('\n', 1)[0] else 'text/plain'
         pages = [{'text': content, 'confidence': None, 'method': 'utf8-logical-page'}]
-    if not pages or len(pages) > MAX_PAGES or sum(len(p['text']) for p in pages) > MAX_TEXT:
+    if mime != 'application/zip':
+        budget['text'] += sum(len(p['text']) for p in pages)
+        budget['pages'] += len(pages)
+    if not pages or budget['pages'] > MAX_PAGES or budget['text'] > MAX_TEXT:
         raise ValueError('EXTRACTED_TEXT_OR_PAGE_LIMIT')
     return {'mime': mime, 'pages': pages}
 

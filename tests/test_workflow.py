@@ -113,13 +113,29 @@ def test_document_claim_review_publication_correction(monkeypatch):
             post(base + '/evidence-items', quote | {'quote': 'absent quotation'}, rev, expected=409)
             evidence = post(base + '/evidence-items', quote, rev)
             rev = evidence['case_revision']
+            entity_body = dict(entity_type='Organization', canonical_name='TEST FIXTURE identity', jurisdiction='PT',
+                               identity_confidence='unverified', identity_basis='TEST FIXTURE: not a real entity')
+            first_entity = post(base + '/entities', entity_body, rev)
+            rev = first_entity['case_revision']
+            second_entity = post(base + '/entities', entity_body | {'canonical_name': 'TEST FIXTURE alias'}, rev)
+            rev = second_entity['case_revision']
+            resolution = dict(subject_id=first_entity['id'], object_id=second_entity['id'], evidence_id=evidence['id'],
+                              action='MERGE_ALIAS', rationale='TEST FIXTURE: explicit manual alias resolution')
+            merge = post(base + '/entity-resolutions', resolution, rev)
+            rev = merge['case_revision']
+            post(base + '/entity-resolutions', resolution | {'subject_id': second_entity['id'], 'object_id': first_entity['id']}, rev, expected=409)
+            undo = post(base + '/entity-resolutions', resolution | {'action': 'UNDO_MERGE', 'reverses_id': merge['id']}, rev)
+            rev = undo['case_revision']
             assert client.get(base + '/search?q=population').json()['records']
             assignment = dict(claim_id=claim['id'], reviewer_sub='TEST_REVIEWER')
             post(base + '/review-assignments', assignment, rev)
+            post(base + '/members', {'subject': 'TEST_ANALYST', 'role': 'reviewer'}, rev)
             assessment = dict(claim_id=claim['id'], status='SUPPORTED', conflict_declaration='NO_CONFLICT',
                 independence_rationale='TEST FIXTURE: separate reviewer', rationale='TEST FIXTURE: exact wording was checked',
                 quotations_checked=True, provenance_checked=True, contradicting_material_considered='TEST FIXTURE: none in this bounded fixture',
                 limitations='TEST FIXTURE: not a real-world verified finding')
+            identity.update(roles=['analyst', 'editor', 'reviewer'])
+            post(base + '/assessments', assessment, rev, expected=403)
             identity.update(sub='TEST_REVIEWER', roles=['reviewer'])
             post(base + '/assessments', assessment, rev)
             identity.update(sub='TEST_COUNSEL', roles=['counsel'])
@@ -149,11 +165,30 @@ def test_document_claim_review_publication_correction(monkeypatch):
                 jurisdiction='PT', external_ids={}, identity_confidence='unverified',
                 identity_basis='TEST FIXTURE: unverified test identity'), rev)
             post(base + '/publications', publication | {'kind': 'CORRECTED', 'supersedes_id': corrected['id']}, rev + 1, expected=409)
+            rev += 1
+            withdrawal = post(base + '/claims/' + claim['id'] + '/withdrawal', {'rationale': 'TEST FIXTURE: author retracts this test assertion'}, rev)
+            rev = withdrawal['case_revision']
+            identity.update(sub='TEST_REVIEWER', roles=['reviewer'])
+            post(base + '/assessments', assessment, rev, expected=409)
+            identity.update(sub='TEST_ANALYST', roles=['analyst', 'editor'])
+            amended = post(base + '/case-revisions', case | {'title': 'TEST FIXTURE: amended scope',
+                'rationale': 'TEST FIXTURE: append-only scope correction'}, rev)
+            rev = amended['case_revision']
+            assert client.get(base).json()['body']['title'] == 'TEST FIXTURE: amended scope'
+            member = post(base + '/members', {'subject': 'TEST_READER', 'role': 'reader'}, rev)
+            identity.update(sub='TEST_READER', roles=['reader'])
+            assert client.get(base).status_code == 200
+            identity.update(roles=[])
+            assert client.get(base).status_code == 403
+            identity.update(sub='TEST_ANALYST', roles=['analyst', 'editor'])
+            post(base + '/member-revocations', {'member_id': member['id'], 'rationale': 'TEST FIXTURE: revoke this case access'}, rev)
+            identity.update(sub='TEST_READER', roles=['reader'])
+            assert client.get(base).status_code == 404
             identity.update(sub='OUTSIDER', roles=['editor'])
             assert client.get(base).status_code == 404
             identity.update(sub='TEST_ANALYST', roles=['administrator'])
             post(base + '/entities', dict(entity_type='State', canonical_name='TEST FIXTURE', jurisdiction='PT',
-                identity_confidence='unverified', identity_basis='TEST FIXTURE: no authority'), rev + 1, expected=403)
+                identity_confidence='unverified', identity_basis='TEST FIXTURE: no authority'), rev, expected=403)
             with tenant_session() as session:
                 assert session.execute(text('SELECT count(*) FROM publications WHERE case_id=:cid'), {'cid': cid}).scalar_one() == 2
     finally:
@@ -176,3 +211,20 @@ def test_workspace_contract_errors_and_language_resources():
         assert contract['paths']['/v1/cases']['post']['security']
         headers = contract['paths']['/v1/cases/{cid}/claims']['post']['parameters']
         assert {h['name'] for h in headers} >= {'Idempotency-Key', 'If-Match'}
+
+
+def test_rate_limit_uses_problem_details():
+    from fastapi import FastAPI
+    from app.middleware import RateLimitMiddleware
+    limited = FastAPI()
+    limited.add_middleware(RateLimitMiddleware, limit=2)
+    @limited.get('/')
+    def root():
+        return {'ok': True}
+    with TestClient(limited) as client:
+        assert client.get('/').status_code == 200
+        assert client.get('/').status_code == 200
+        response = client.get('/')
+        assert response.status_code == 429
+        assert response.headers['content-type'].startswith('application/problem+json')
+        assert response.headers['Retry-After'] == '60'

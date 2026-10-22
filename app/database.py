@@ -24,6 +24,7 @@ PROTECTED_TABLES = (
     "reviews", "audit_events", "evidence_attestations",
     'cases', 'case_members', 'case_events', 'hypotheses', 'sources', 'documents', 'document_pages',
     'document_processing', 'evidence_items', 'entities', 'relationships', 'review_assignments',
+    'entity_resolutions', 'case_revisions', 'case_member_revocations',
     'assessments', 'publication_gates', 'responses', 'publications', 'write_receipts', 'integrity_incidents', 'record_seals',
 )
 

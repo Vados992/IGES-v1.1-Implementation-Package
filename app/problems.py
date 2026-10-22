@@ -1,5 +1,6 @@
 """RFC 9457 errors with request tracing; no private payloads in diagnostics."""
 import logging
+from http import HTTPStatus
 import time
 from uuid import uuid4
 
@@ -13,11 +14,34 @@ log = logging.getLogger('iges.requests')
 
 def problem(status, code, request_id=None, headers=None):
     return JSONResponse(status_code=status, media_type='application/problem+json', headers=headers,
-                        content={'type': 'about:blank', 'title': code, 'status': status, 'detail': code,
+                        content={'type': 'about:blank', 'title': HTTPStatus(status).phrase, 'status': status, 'detail': code,
                                  'instance': 'urn:uuid:' + (request_id or str(uuid4()))})
 
 
 def install(app):
+    logging.basicConfig(level=logging.INFO, format='%(message)s')
+    original_openapi = app.openapi
+    def openapi():
+        schema = original_openapi()
+        problem_schema = {'type': 'object', 'required': ['type', 'title', 'status', 'detail', 'instance'],
+                          'properties': {key: {'type': 'integer' if key == 'status' else 'string'}
+                                         for key in ['type', 'title', 'status', 'detail', 'instance']}}
+        schema.setdefault('components', {}).setdefault('schemas', {})['Problem'] = problem_schema
+        for path in schema['paths'].values():
+            for operation in path.values():
+                if not isinstance(operation, dict) or 'responses' not in operation:
+                    continue
+                for status in [400, 401, 403, 404, 409, 410, 412, 413, 422, 429, 500, 503]:
+                    operation['responses'][str(status)] = {'description': HTTPStatus(status).phrase,
+                        'content': {'application/problem+json': {'schema': {'$ref': '#/components/schemas/Problem'}}}}
+        return schema
+    app.openapi = openapi
+    @app.exception_handler(Exception)
+    async def unexpected(request, exc):
+        request_id = getattr(request.state, 'trace_id', None)
+        log.error('internal_error request_id=%s class=%s', request_id, type(exc).__name__)
+        return problem(500, 'INTERNAL_ERROR', request_id)
+
     @app.exception_handler(HTTPException)
     async def http_error(request, exc):
         return problem(exc.status_code, str(exc.detail), getattr(request.state, 'trace_id', None), exc.headers)

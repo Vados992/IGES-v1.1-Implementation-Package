@@ -46,9 +46,9 @@ def main():
                 'period_from': '2023-07-01', 'period_to': '2023-07-31', 'jurisdictions': ['International']})
             base = '/v1/cases/' + case['id']
             source = post(base + '/sources', {'title': 'RFC 9457: Problem Details for HTTP APIs',
-                'publisher': 'RFC Editor / IETF', 'url': receipt['source_url'], 'published_at': '2023-07-01',
+                'publisher': 'RFC Editor / IETF', 'url': receipt['source_url'], 'published_at': None,
                 'language': 'en', 'primacy': 'primary', 'independence_group': 'ietf-rfc9457',
-                'provenance_basis': 'Direct RFC Editor HTTPS origin; exact bytes and receipt retained.'})
+                'provenance_basis': 'Direct RFC Editor HTTPS origin; exact bytes and receipt retained. Header states July 2023; exact day is unknown.'})
             doc = post(base + '/documents?source_id=' + source['id'], content=raw)
             require(process_once() == 1, 'Worker did not process PDF')
             revision = client.get(base).json()['case_revision']
@@ -56,11 +56,15 @@ def main():
             require(pages['processing'][0]['status'] == 'READY', 'PDF scan/extraction failed')
             require('Problem Details' in pages['pages'][0]['text_content'], 'Page text missing')
             require(client.get(base + '/documents/' + doc['id'] + '/original').content == raw, 'Original changed')
+            derived_source = post(base + '/sources', {'title': 'Page 1 rendering derived from RFC 9457',
+                'publisher': 'IGES isolated CI rendering process', 'url': receipt['source_url'], 'language': 'en',
+                'primacy': 'derivative', 'independence_group': 'ietf-rfc9457',
+                'provenance_basis': 'Rendered from the retained primary PDF using Poppler; not an independent source. Original SHA-256: ' + receipt['sha256']})
             with tempfile.TemporaryDirectory() as directory:
                 png = Path(directory) / 'page'
                 subprocess.run([command('pdftoppm'), '-f', '1', '-l', '1', '-singlefile', '-scale-to', '2400',  # noqa: S603
                                 '-png', str(source_dir / 'rfc9457.pdf'), str(png)], check=True)  # noqa: S603
-                image = post(base + '/documents?source_id=' + source['id'], content=png.with_suffix('.png').read_bytes())
+                image = post(base + '/documents?source_id=' + derived_source['id'], content=png.with_suffix('.png').read_bytes())
             require(process_once() == 1, 'Worker did not process image')
             revision = client.get(base).json()['case_revision']
             image_pages = client.get(base + '/documents/' + image['id'] + '/pages').json()
@@ -70,8 +74,12 @@ def main():
             require('problem' in image_pages['pages'][0]['text_content'].lower(), 'OCR source text missing')
             require(client.get(base + '/search?q=Problem').json()['records'], 'Search returned no locators')
             # Scanner fixture only; never treated as a source or a finding.
+            test_source = post(base + '/sources', {'title': 'EXPLICIT EICAR SCANNER TEST FIXTURE',
+                'publisher': 'Isolated CI test harness', 'url': 'https://www.eicar.org/download-anti-malware-testfile/',
+                'language': 'en', 'primacy': 'derivative', 'independence_group': 'EXPLICIT_TEST_FIXTURE',
+                'provenance_basis': 'Constructed standard scanner marker for a negative security test; not fetched factual evidence and never published.'})
             eicar = b'X5O!P%@AP[4\\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*'
-            bad = post(base + '/documents?source_id=' + source['id'], content=eicar)
+            bad = post(base + '/documents?source_id=' + test_source['id'], content=eicar)
             require(process_once() == 1, 'Worker did not inspect scanner marker')
             status = client.get(base + '/documents/' + bad['id'] + '/pages').json()['processing'][0]['status']
             require(status == 'QUARANTINED', 'EICAR not quarantined')

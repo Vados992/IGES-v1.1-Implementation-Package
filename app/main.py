@@ -19,7 +19,7 @@ from starlette.concurrency import run_in_threadpool
 from app.auth import require_role, https_endpoint, verified_identity
 from app.config import settings
 from app.database import tenant_session, check_database
-from app.middleware import BodyLimitMiddleware
+from app.middleware import BodyLimitMiddleware, RateLimitMiddleware
 from app.persistence import append_audit, store_snapshot, store_awards
 from app.usaspending import fetch_awards, MAX_FISCAL_YEAR
 from app.worldbank import ALLOWED_INDICATORS, fetch_snapshot
@@ -32,6 +32,7 @@ app = FastAPI(
     description="Source-attributed public economic records; no automated political verdicts.",
 )
 app.add_middleware(BodyLimitMiddleware, max_bytes=65536)
+app.add_middleware(RateLimitMiddleware)
 app.include_router(workflow_router)
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -372,21 +373,9 @@ def add_financial_event(
                 "note": "Recorded as sourced event; not automatically treated as a verified transfer"}
 
 
-@app.post("/v1/admin/claims")
+@app.post("/v1/admin/claims", deprecated=True)
 def create_claim(body: ClaimRequest, user: dict = Depends(require_role("analyst"))):
-    with tenant_session() as session:
-        found = session.execute(
-            text("SELECT 1 FROM evidence WHERE id=:eid"), {"eid": str(body.evidence_id)}
-        ).first()
-        if not found:
-            raise HTTPException(status_code=404, detail="EVIDENCE_NOT_FOUND")
-        claim_id = session.execute(
-            text("INSERT INTO claims (project_id,evidence_id,statement,submitted_by) "
-                 "VALUES (current_setting('iges.project_id')::uuid,:eid,:statement,:actor) RETURNING id"),
-            {"eid": str(body.evidence_id), "statement": body.statement, "actor": user["sub"]},
-        ).scalar_one()
-        append_audit(session, user["sub"], "CLAIM_SUBMITTED", str(claim_id))
-        return {"claim_id": str(claim_id), "state": "UNASSESSED", "published": False}
+    raise HTTPException(410, 'USE_CASE_SCOPED_CLAIMS_WITH_PERIOD_AND_JURISDICTION')
 
 
 @app.post("/v1/admin/claims/{claim_id}/reviews")

@@ -53,7 +53,7 @@ def test_v2_upgrade_preserves_source_and_audit():
                 assert {key: after[key] for key in before} == before
                 assert dict(connection.execute(text("SELECT * FROM audit_events")).mappings().one()) == audit_before
                 assert after["request_sha256"] == hashlib.sha256(("GET " + source).encode()).hexdigest()
-                assert connection.execute(text("SELECT version FROM schema_version")).scalar_one() == 4
+                assert connection.execute(text("SELECT version FROM schema_version")).scalar_one() == 5
                 protected = connection.execute(text(
                     "SELECT relrowsecurity AND relforcerowsecurity FROM pg_class WHERE relname='public_awards'"
                 )).scalar_one()
