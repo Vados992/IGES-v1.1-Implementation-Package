@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex">
+  <title>IGES | Evidence-centric public data pilot</title>
+  <link rel="stylesheet" href="/assets/dashboard.css">
+  <script src="/assets/dashboard.js" defer></script>
+</head>
+<body>
+  <div class="shell">
+    <header><div class="brand"><span class="mark">IGES</span><span>Independent Geopolitical Evidence System</span></div><span class="pilot">CONTROLLED PILOT</span></header>
+    <section class="hero">
+      <p class="eyebrow">PUBLIC EVIDENCE REGISTER / V1.1</p>
+      <h1>Trace every number to its source.</h1>
+      <p class="dek">A reproducible public record of source-attributed indicators. This pilot reports economic data, not political judgments, attribution of wrongdoing, or claims of state control.</p>
+      <div class="principles"><span>Source-linked</span><span>Immutable snapshots</span><span>Version-aware</span><span>No automated verdicts</span></div>
+    </section>
+    <main>
+      <section class="panel">
+        <div class="panel-title"><div><p class="eyebrow">LIVE DATABASE</p><h2>Economic indicator observations</h2></div><span id="status" role="status">Loading…</span></div>
+        <form id="filterForm">
+          <label>Country code <input id="country" name="country" value="PRT" pattern="[A-Z]{3}" maxlength="3" aria-label="Three-letter country code"></label>
+          <label>Indicator <select id="indicator" name="indicator">
+            <option value="SP.POP.TOTL">Population, total</option>
+            <option value="NY.GDP.MKTP.CD">GDP (current US$)</option>
+            <option value="GC.DOD.TOTL.GD.ZS">Central government debt (% GDP)</option>
+          </select></label>
+          <button type="submit">Explore source records</button>
+        </form>
+        <div class="tablewrap"><table>
+          <thead><tr><th>Country</th><th>Indicator</th><th>Year</th><th>Value</th><th>Origin</th><th>State</th></tr></thead>
+          <tbody id="dataRows"><tr><td colspan="6">Requesting records…</td></tr></tbody>
+        </table></div>
+        <p class="minor" id="help">No records are invented. An operator must run a live official-source import before data appear here.</p>
+      </section>
+      <section class="panel awards-panel">
+        <div class="panel-title"><div><p class="eyebrow">OFFICIAL FEDERAL AWARDS</p><h2>Public procurement award records</h2></div><span id="awardStatus" role="status">Loading…</span></div>
+        <p class="minor">Source: USAspending.gov. “Award Amount” is not proof of cash transfer, expenditure or ultimate beneficiary. Only ingested search pages are shown.</p>
+        <div class="tablewrap"><table>
+          <thead><tr><th>Award ID</th><th>Awarding agency</th><th>Recipient</th><th>Reported amount</th><th>Evidence</th></tr></thead>
+          <tbody id="awardRows"><tr><td colspan="5">Loading public award records…</td></tr></tbody>
+        </table></div>
+      </section>
+      <section class="footcards">
+        <article><h3>What is verified?</h3><p>Each record contains a cryptographic digest, retrieval date, exact API URL and locator into the original response. Origin verification and factual corroboration remain distinct.</p></article>
+        <article><h3>What is not inferred?</h3><p>Correlation is not proof of control. Government budget allocations are not bank transfers. Statistical trends do not assign responsibility to individuals.</p></article>
+        <article><h3>Operational boundary</h3><p>This repository is a controlled, single-project pilot. Confidential sources, public allegations and cross-tenant research are intentionally not enabled.</p></article>
+      </section>
+    </main>
+    <footer><span>IGES v1.1 · Independent source attribution</span><span>Data source: <a href="https://data.worldbank.org/" rel="noopener noreferrer" target="_blank">World Bank</a> / <a href="https://www.usaspending.gov/" target="_blank" rel="noopener noreferrer">USAspending.gov</a> · <a href="/docs">API specification</a></span></footer>
+  </div>
+</body>
+</html>

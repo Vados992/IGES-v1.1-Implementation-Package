@@ -2,10 +2,13 @@
 from __future__ import annotations
 
 from decimal import Decimal
+from pathlib import Path
 from uuid import UUID
 
 import httpx
 from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, ConfigDict
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
@@ -15,9 +18,10 @@ from starlette.concurrency import run_in_threadpool
 
 from app.auth import require_role, https_endpoint, verified_identity
 from app.config import settings
-from app.database import tenant_session
+from app.database import tenant_session, check_database
 from app.middleware import BodyLimitMiddleware
-from app.persistence import append_audit, store_snapshot
+from app.persistence import append_audit, store_snapshot, store_awards
+from app.usaspending import fetch_awards, MAX_FISCAL_YEAR
 from app.worldbank import ALLOWED_INDICATORS, fetch_snapshot
 
 app = FastAPI(
@@ -26,6 +30,15 @@ app = FastAPI(
     description="Source-attributed public economic records; no automated political verdicts.",
 )
 app.add_middleware(BodyLimitMiddleware, max_bytes=65536)
+
+STATIC_DIR = Path(__file__).parent / "static"
+app.mount("/assets", StaticFiles(directory=STATIC_DIR), name="assets")
+
+
+@app.get("/", include_in_schema=False)
+def dashboard():
+    return FileResponse(STATIC_DIR / "index.html", headers={
+        "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self'; object-src 'none'; base-uri 'none'"})
 
 
 class RequestModel(BaseModel):
@@ -37,6 +50,11 @@ class IngestRequest(RequestModel):
     indicator: str
     start: int = Field(ge=1960, le=2100)
     end: int = Field(ge=1960, le=2100)
+
+
+class AwardIngestRequest(RequestModel):
+    fiscal_year: int = Field(ge=2008, le=MAX_FISCAL_YEAR)
+    limit: int = Field(default=10, ge=1, le=25)
 
 
 class AttestationRequest(RequestModel):
@@ -101,20 +119,7 @@ def whoami(user: dict = Depends(verified_identity)):
 def ready():
     try:
         with tenant_session(read_only=True) as session:
-            version = session.execute(text("SELECT version FROM schema_version")).scalar_one()
-            project_count = session.execute(text("SELECT count(*) FROM projects")).scalar_one()
-            unsafe = session.execute(text(
-                "SELECT rolsuper OR rolbypassrls OR rolcreatedb OR rolcreaterole "
-                "FROM pg_roles WHERE rolname=current_user"
-            )).scalar_one()
-            rls_count = session.execute(text(
-                "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace "
-                "WHERE n.nspname='public' AND c.relname IN "
-                "('projects','evidence','observations','financial_events','claims','reviews',"
-                "'audit_events','evidence_attestations') AND c.relrowsecurity AND c.relforcerowsecurity"
-            )).scalar_one()
-            if version != 2 or project_count != 1 or unsafe or rls_count != 8:
-                raise RuntimeError("schema, role, project or RLS not ready")
+            check_database(session)
         return {"status": "ready"}
     except Exception:
         raise HTTPException(status_code=503, detail="DATABASE_UNAVAILABLE") from None
@@ -194,6 +199,59 @@ async def ingest_worldbank(
     return {"evidence_id": evidence_id, "inserted_observations": count,
             "new_snapshot": created, "content_sha256": snapshot.sha256,
             "provenance_state": "UNASSESSED"}
+
+
+@app.get("/v1/public/awards")
+def public_awards(limit: int = Query(default=50, ge=1, le=100)):
+    with tenant_session(read_only=True) as session:
+        rows = session.execute(text("""
+            SELECT id::text AS id,source_award_key,external_award_id,recipient_name,
+                   awarding_agency,funding_agency,award_amount::text AS award_amount,currency,
+                   source_locator,source_url,source_request,retrieved_at,content_sha256,
+                   request_sha256,provenance_state
+            FROM (
+              SELECT DISTINCT ON (a.source_award_key)
+                a.*,e.source_url,e.source_request,e.retrieved_at,e.content_sha256,
+                e.request_sha256,e.provenance_state
+              FROM public_awards a JOIN evidence e ON e.id=a.evidence_id AND e.project_id=a.project_id
+              ORDER BY a.source_award_key,e.retrieved_at DESC,a.id DESC
+            ) recent ORDER BY recent.award_amount DESC NULLS LAST,source_award_key LIMIT :limit
+        """), {"limit": limit}).mappings().all()
+    return {"count": len(rows), "records": [dict(row) for row in rows],
+            "meaning": "USAspending award amount, not a verified disbursement or expenditure",
+            "coverage": "Only ingested search pages; not all federal awards"}
+
+
+@app.get("/v1/public/awards/{award_id}/provenance")
+def award_provenance(award_id: UUID):
+    with tenant_session(read_only=True) as session:
+        row = session.execute(text("""
+            SELECT a.id::text AS award_record_id,a.source_locator,e.id::text AS evidence_id,
+                   e.provider,e.source_url,e.source_request,e.retrieved_at,e.content_sha256,
+                   e.request_sha256,e.provenance_state
+            FROM public_awards a JOIN evidence e ON e.id=a.evidence_id AND e.project_id=a.project_id
+            WHERE a.id=:id
+        """), {"id": str(award_id)}).mappings().first()
+    if row is None:
+        raise HTTPException(status_code=404, detail="AWARD_NOT_FOUND")
+    return dict(row)
+
+
+@app.post("/v1/admin/ingest/usaspending")
+async def ingest_usaspending(body: AwardIngestRequest, user: dict = Depends(require_role("ingestor"))):
+    try:
+        snapshot = await fetch_awards(body.fiscal_year, body.limit)
+    except (httpx.HTTPError, ValueError, UnicodeDecodeError, TimeoutError, RecursionError):
+        raise HTTPException(status_code=502, detail="UPSTREAM_INVALID_OR_UNAVAILABLE") from None
+
+    def persist():
+        with tenant_session() as session:
+            return store_awards(session, snapshot, user["sub"])
+
+    evidence_id, count, created = await run_in_threadpool(persist)
+    return {"evidence_id": evidence_id, "awards_inserted": count, "new_snapshot": created,
+            "content_sha256": snapshot.sha256, "request_sha256": snapshot.request_sha256,
+            "has_next_page": snapshot.has_next_page, "provenance_state": "UNASSESSED"}
 
 
 @app.post("/v1/admin/evidence/{evidence_id}/attest")

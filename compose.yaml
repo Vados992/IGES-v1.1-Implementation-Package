@@ -11,6 +11,7 @@ services:
     volumes:
       - iges_db:/var/lib/postgresql/data
       - ./db/init:/docker-entrypoint-initdb.d:ro
+      - ./db/migrations:/iges-migrations:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d iges"]
       interval: 5s

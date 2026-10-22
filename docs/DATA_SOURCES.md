@@ -17,10 +17,22 @@ These are **official source-attributed observations**, not conclusive independen
 geopolitical evidence. Economic statistics cannot, by themselves, establish state
 control, corruption, political intervention or individual responsibility.
 
+## Live source: USAspending.gov federal procurement award search
+
+Official API contract: https://github.com/fedspendingtransparency/usaspending-api/blob/master/usaspending_api/api_contracts/contracts/v2/search/spending_by_award.md
+
+This adapter sends a fixed-shape bounded POST request for a specified federal fiscal
+year and at most 25 contract award results. The complete request and raw response
+are both hashed and stored. `Award Amount` is retained **as an attributed award
+figure only**, never automatically converted to an actual payment, grant
+disbursement or end-recipient benefit. The response is paginated; first-page
+samples are partial, not representative of all awards.
+
+USAspending data may be revised and must be corroborated with transaction-level
+records for any claim about money changing hands.
+
 ## Candidate adapters, not yet implemented
 
-- USAspending.gov: federal award/obligation data; distinguish award totals
-  from actual disbursements and downstream spending.
 - European Commission Financial Transparency System: EU budget recipients.
 - OECD and IMF: macroeconomic and governance series subject to licensing.
 - Official legislative/regulatory journals: decisions and formal acts.

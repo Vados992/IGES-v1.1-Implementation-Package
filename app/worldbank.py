@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import re
 import asyncio
 from dataclasses import dataclass
@@ -10,13 +9,14 @@ from decimal import Decimal, InvalidOperation
 
 import httpx
 
+from app.source_json import MAX_BYTES, load_source_json
+
 ALLOWED_INDICATORS = frozenset({
     "SP.POP.TOTL",
     "NY.GDP.MKTP.CD",
     "GC.DOD.TOTL.GD.ZS",
 })
 COUNTRY_PATTERN = re.compile(r"^[A-Z]{3}$")
-MAX_BYTES = 2_000_000
 
 
 @dataclass(frozen=True)
@@ -48,29 +48,7 @@ def validate_request(country: str, indicator: str, start: int, end: int) -> None
 
 def parse_snapshot(raw: bytes, url: str, country: str, indicator: str, start: int, end: int) -> Snapshot:
     validate_request(country, indicator, start, end)
-    if len(raw) > MAX_BYTES:
-        raise ValueError("source response exceeds maximum size")
-    def number(token: str) -> Decimal:
-        if len(token) > 100:
-            raise ValueError("numeric token too large")
-        value = Decimal(token)
-        if not value.is_finite() or abs(value.adjusted()) > 100:
-            raise ValueError("non-finite or excessive numeric value")
-        return value
-
-    def unique_object(pairs):
-        out = {}
-        for key, value in pairs:
-            if key in out:
-                raise ValueError("duplicate JSON key")
-            out[key] = value
-        return out
-
-    def no_constant(token):
-        raise ValueError("non-finite JSON constant")
-
-    payload = json.loads(raw.decode("utf-8"), parse_float=number, parse_int=number,
-                         parse_constant=no_constant, object_pairs_hook=unique_object)
+    payload = load_source_json(raw)
     if not isinstance(payload, list) or len(payload) != 2 or not isinstance(payload[1], list):
         raise ValueError("unexpected World Bank response envelope")
     rows = payload[1]

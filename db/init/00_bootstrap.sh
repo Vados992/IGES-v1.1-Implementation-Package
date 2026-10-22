@@ -15,4 +15,5 @@ psql --username "${POSTGRES_USER}" --dbname "${POSTGRES_DB}" \
   --set=ON_ERROR_STOP=1 \
   --set=runtime_password="${IGES_DB_PASSWORD}" \
   --set=project_id="${IGES_PUBLIC_PROJECT_ID}" \
-  --file /docker-entrypoint-initdb.d/01_schema.template
+  --file /docker-entrypoint-initdb.d/01_schema.template \
+  --file /iges-migrations/003_award_provenance.sql

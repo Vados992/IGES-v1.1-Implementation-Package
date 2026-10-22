@@ -14,10 +14,33 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.config import settings
+from app.migrate import SCHEMA_VERSION
 
 engine = None
 factory = None
 _init_lock = Lock()
+PROTECTED_TABLES = (
+    "projects", "evidence", "observations", "public_awards", "financial_events", "claims",
+    "reviews", "audit_events", "evidence_attestations",
+)
+
+
+def check_database(session: Session) -> None:
+    version = session.execute(text("SELECT version FROM schema_version")).scalar_one()
+    project_count = session.execute(text("SELECT count(*) FROM projects")).scalar_one()
+    unsafe = session.execute(text(
+        "SELECT rolsuper OR rolbypassrls OR rolcreatedb OR rolcreaterole "
+        "FROM pg_roles WHERE rolname=current_user")).scalar_one()
+    protections = session.execute(text(
+        "SELECT c.relname,c.relrowsecurity,c.relforcerowsecurity,"
+        "has_table_privilege(current_user,c.oid,'UPDATE,DELETE,TRUNCATE') AS mutable "
+        "FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace "
+        "WHERE n.nspname='public' AND c.relname=ANY(:tables)"),
+        {"tables": list(PROTECTED_TABLES)}).all()
+    if (version != SCHEMA_VERSION or project_count != 1 or unsafe
+            or len(protections) != len(PROTECTED_TABLES)
+            or any(not row.relrowsecurity or not row.relforcerowsecurity or row.mutable for row in protections)):
+        raise RuntimeError("schema, role, project, RLS or append-only permissions not ready")
 
 
 def _factory():

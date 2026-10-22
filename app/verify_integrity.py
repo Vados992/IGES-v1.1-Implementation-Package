@@ -4,12 +4,15 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import argparse
 from datetime import timezone
+from pathlib import Path
 
 from sqlalchemy import text
 
-from app.database import tenant_session
+from app.database import tenant_session, check_database
 from app.worldbank import parse_snapshot
+from app.usaspending import parse_awards, canonical_request
 
 
 def verify_audit_rows(rows) -> int:
@@ -27,13 +30,33 @@ def verify_audit_rows(rows) -> int:
     return len(rows)
 
 
-def verify_integrity() -> dict:
+def verify_integrity(export_dir: Path | None = None) -> dict:
     with tenant_session(read_only=True, repeatable_read=True) as session:
+        check_database(session)
         # A single coherent snapshot while other writers continue.
-        evidence = session.execute(text("SELECT id,content_sha256,raw_bytes,source_url FROM evidence")).mappings().all()
+        evidence = session.execute(text(
+            "SELECT id,provider,content_sha256,request_sha256,source_request,raw_bytes,source_url,retrieved_at FROM evidence"
+        )).mappings().all()
         for row in evidence:
             if hashlib.sha256(bytes(row["raw_bytes"])).hexdigest() != row["content_sha256"]:
                 raise ValueError(f"evidence digest mismatch: {row['id']}")
+            if row["provider"] == "USA_SPENDING":
+                if hashlib.sha256(canonical_request(row["source_request"])).hexdigest() != row["request_sha256"]:
+                    raise ValueError(f"request digest mismatch: {row['id']}")
+                awards = parse_awards(bytes(row["raw_bytes"]), row["source_request"], row["source_url"])
+                stored = session.execute(text(
+                    "SELECT source_award_key,external_award_id,recipient_name,awarding_agency,funding_agency,"
+                    "award_amount,source_locator FROM public_awards WHERE evidence_id=:eid"), {"eid": row["id"]}).all()
+                expected = {(a.key, a.award_id, a.recipient, a.awarding_agency, a.funding_agency, a.amount, a.locator)
+                            for a in awards.awards}
+                if len(stored) != len(expected) or {tuple(a) for a in stored} != expected:
+                    raise ValueError(f"award locator/value mismatch: {row['id']}")
+                continue
+            if row["provider"] != "WORLD_BANK":
+                raise ValueError("unknown evidence provider")
+            request_hash = hashlib.sha256(("GET " + row["source_url"]).encode()).hexdigest()
+            if request_hash != row["request_sha256"]:
+                raise ValueError(f"request digest mismatch: {row['id']}")
             request = re.fullmatch(
                 r"https://api\.worldbank\.org/v2/country/([A-Z]{3})/indicator/([A-Z.0-9]+)"
                 r"\?format=json&date=([0-9]{4}):([0-9]{4})&per_page=100", row["source_url"])
@@ -49,9 +72,18 @@ def verify_integrity() -> dict:
                 raise ValueError(f"observation locator/value mismatch: {row['id']}")
         rows = session.execute(text("SELECT * FROM audit_events ORDER BY sequence")).mappings().all()
         count = verify_audit_rows(rows)
+    if export_dir is not None:
+        export_dir.mkdir(parents=True, exist_ok=True)
+        for row in evidence:
+            (export_dir / f"{row['id']}.response.json").write_bytes(bytes(row["raw_bytes"]))
+            receipt = {key: row[key] for key in ["provider", "content_sha256", "request_sha256", "source_request", "source_url"]}
+            receipt.update(evidence_id=str(row["id"]), retrieved_at=row["retrieved_at"].isoformat())
+            (export_dir / f"{row['id']}.receipt.json").write_text(json.dumps(receipt, indent=2), encoding="utf-8")
     return {"evidence_hashes_checked": len(evidence), "audit_entries_checked": count,
             "status": "INTERNALLY_CONSISTENT", "externally_anchored": False}
 
 
 if __name__ == "__main__":
-    print(json.dumps(verify_integrity(), indent=2))
+    parser = argparse.ArgumentParser(description="Verify schema permissions, both sources and audit history")
+    parser.add_argument("--export-dir", type=Path, help="Optionally export verified public-source snapshots only")
+    print(json.dumps(verify_integrity(parser.parse_args().export_dir), indent=2))

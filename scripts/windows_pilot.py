@@ -76,7 +76,7 @@ def realm(config):
         "ssoSessionMaxLifespan": 3600, "eventsEnabled": True, "eventsExpiration": 604800,
         "adminEventsEnabled": True, "adminEventsDetailsEnabled": False,
         "passwordPolicy": "length(16) and notUsername and notEmail",
-        "roles": {"realm": [{"name": role} for role in ["analyst", "reviewer", "ingestor"]]},
+        "roles": {"realm": [{"name": role} for role in ["analyst", "reviewer", "ingestor", "editor", "counsel", "panel", "respondent"]]},
         "browserFlow": "iges-mfa", "authenticationFlows": [
             {"alias": "iges-mfa", "providerId": "basic-flow", "topLevel": True, "builtIn": False,
              "authenticationExecutions": [
@@ -148,7 +148,7 @@ def setup():
         run([*psql, "-d", "postgres"], input=init, text=True, env=environment, capture_output=True)
         template = (REPO / "db/init/01_schema.template").read_text()
         variables = f"\\set runtime_password '{config['runtime_password']}'\n\\set project_id '{config['project_id']}'\n"
-        run([*psql, "-d", "iges", "--single-transaction"], input=variables + template,
+        run([*psql, "-d", "iges", "--single-transaction"], input=variables + template + (REPO / "db/migrations/003_award_provenance.sql").read_text(),
             text=True, env=environment, capture_output=True)
         (STATE / "database-initialized").touch()
     imported = identity / "data/import"
@@ -237,3 +237,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
