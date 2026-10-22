@@ -68,3 +68,13 @@ argument arrays, not broad vulnerability suppression.
 
 See [FR status](FR_STATUS.md), [operations](OPERATIONS.md) and [production gates](PRODUCTION_GATES.md).
 Production, confidential-source and hostile multi-tenant operation remain **NO-GO**.
+
+The added public finance/property batches are available only to eligible
+authenticated project research roles. They are project-wide source records,
+while admission/changes to a case still require membership. No party names or
+full property address table is fetched from NYC/HMLR. LEI is not a banking licence
+or beneficial-owner determination. Broker output is explicitly labelled IEX and,
+for app captures, connector-normalized. Keys stay in operator environment and
+never enter request hashes/URLs, originals or browser configuration. HTTP-client
+URL INFO logs are suppressed. Public gateway and public-source exports exclude
+the new source routes/batches; case publication still needs exact content review.

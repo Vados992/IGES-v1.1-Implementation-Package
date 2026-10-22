@@ -14,7 +14,7 @@ under ignored `work/windows-pilot/private`; it contains passwords, keys and the
 new database cluster. Do not copy it into GitHub, an audit bundle or a shared folder.
 
 - API and OpenAPI: `https://localhost:8444/docs`.
-- Evidence workspace, after an approved v5 migration and IdP web-client setup:
+- Evidence workspace, after an approved v6 migration and IdP web-client setup:
   `https://localhost:8444/workspace`.
 - Keycloak: `https://localhost:8443`.
 - PostgreSQL: `127.0.0.1:55432`, no LAN listener.
@@ -67,7 +67,7 @@ This local cluster is separate from any previous databases on the computer.
 ## Evidence-branch upgrade boundary
 
 This branch has not upgraded the existing installed pilot, changed its roles or
-completed personal MFA enrollment. Fresh setup uses all v5 migrations; existing
+completed personal MFA enrollment. Fresh setup uses all v6 migrations; existing
 databases require the explicit backup/migration process in [operations](OPERATIONS.md).
 Do not reset/recreate an existing database to obtain the new schema.
 

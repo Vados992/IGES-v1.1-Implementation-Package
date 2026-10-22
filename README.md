@@ -23,6 +23,11 @@ fabricated or bundled. This repository is **not production-certified**.
 - Content seals tied to the existing verifiable audit chain; transactional
   idempotency receipts, optimistic revision checks and RFC 9457 errors.
 
+The [public finance/property catalogue](docs/FINANCE_PROPERTY_SOURCES.md) adds 20
+dataset profiles across FDIC, ECB, BoE, Treasury, CFTC, Eurostat, NYC ACRIS, Land
+Registry, GLEIF and Alpaca. All new records are authenticated research data with
+raw/request hashes, private originals and explicit coverage/credential boundaries.
+
 Exact acceptance evidence and remaining limits: [FR-01–FR-16 status](docs/FR_STATUS.md).
 Architecture choices: [MVP ADR](docs/ADR_EVIDENCE_MVP.md).
 Operator/reviewer workflow: [workspace guide](docs/WORKSPACE.md).
@@ -53,9 +58,9 @@ the Compose intake profile provides the tested processing environment.
 
 ## Upgrade existing data
 
-Fresh bootstrap applies schema **v5** in one transaction. Normal application
+Fresh bootstrap applies schema **v6** in one transaction. Normal application
 startup does not migrate. After a verified backup, an administrator can inspect
-and explicitly apply the transactional v2/v3/v4 → v5 migrations:
+and explicitly apply the transactional v2/v3/v4/v5 → v6 migrations:
 
 ```sh
 # Set IGES_MIGRATION_DATABASE_URL privately with administration credentials.
