@@ -14,13 +14,13 @@ def test_public_health_returns_limited_data():
 
 def test_admin_endpoints_deny_without_oidc(monkeypatch):
     from app import auth
-    monkeypatch.setattr(auth.settings, "oidc_issuer", "", raising=False) if False else None
-    # Default CI has no configured issuer; if environment does, missing bearer is still denied.
+    from dataclasses import replace
+    monkeypatch.setattr(auth, "settings", replace(auth.settings, oidc_issuer=""))
     response = client.post(
         "/v1/admin/ingest/worldbank",
         json={"country": "PRT", "indicator": "SP.POP.TOTL", "start": 2023, "end": 2024},
     )
-    assert response.status_code in (401, 503)
+    assert response.status_code == 503
 
 
 def test_invalid_admin_payload_fails_validation():

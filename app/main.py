@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from decimal import Decimal
+import os
 from pathlib import Path
 from uuid import UUID
 
@@ -9,22 +10,31 @@ import httpx
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import SQLAlchemyError
+from starlette.responses import JSONResponse
+from starlette.concurrency import run_in_threadpool
 
-from app.auth import require_role
-from app.database import tenant_session
-from app.persistence import append_audit, store_awards, store_snapshot
-from app.usaspending import fetch_awards
+from app.auth import require_role, https_endpoint, verified_identity
+from app.config import settings
+from app.database import tenant_session, check_database
+from app.middleware import BodyLimitMiddleware, RateLimitMiddleware
+from app.persistence import append_audit, store_snapshot, store_awards
+from app.usaspending import fetch_awards, MAX_FISCAL_YEAR
 from app.worldbank import ALLOWED_INDICATORS, fetch_snapshot
+from app.workflow import router as workflow_router
+from app.problems import install as install_problems
 
 app = FastAPI(
     title="IGES v1.1 Controlled Pilot",
     version="1.1.0-pilot",
     description="Source-attributed public economic records; no automated political verdicts.",
 )
-
+app.add_middleware(BodyLimitMiddleware, max_bytes=65536)
+app.add_middleware(RateLimitMiddleware)
+app.include_router(workflow_router)
 
 STATIC_DIR = Path(__file__).parent / "static"
 app.mount("/assets", StaticFiles(directory=STATIC_DIR), name="assets")
@@ -32,31 +42,45 @@ app.mount("/assets", StaticFiles(directory=STATIC_DIR), name="assets")
 
 @app.get("/", include_in_schema=False)
 def dashboard():
-    return FileResponse(
-        STATIC_DIR / "index.html",
-        headers={"Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self'; object-src 'none'; base-uri 'none'"},
-    )
+    return FileResponse(STATIC_DIR / "index.html", headers={
+        "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self'; object-src 'none'; base-uri 'none'"})
 
 
-class IngestRequest(BaseModel):
+class RequestModel(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+
+@app.get('/workspace', include_in_schema=False)
+def workspace():
+    return FileResponse(STATIC_DIR / 'workspace.html', headers={
+        'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"})
+
+
+@app.get('/publication', include_in_schema=False)
+def publication_reader():
+    return FileResponse(STATIC_DIR / 'publication.html', headers={
+        'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"})
+
+
+class IngestRequest(RequestModel):
     country: str = Field(min_length=3, max_length=3, pattern=r"^[A-Z]{3}$")
     indicator: str
     start: int = Field(ge=1960, le=2100)
     end: int = Field(ge=1960, le=2100)
 
 
-class AwardIngestRequest(BaseModel):
-    fiscal_year: int = Field(ge=2008, le=2026)
+class AwardIngestRequest(RequestModel):
+    fiscal_year: int = Field(ge=2008, le=MAX_FISCAL_YEAR)
     limit: int = Field(default=10, ge=1, le=25)
 
 
-class AttestationRequest(BaseModel):
+class AttestationRequest(RequestModel):
     method: str = Field(pattern=r"^(OFFICIAL_API|DIGITAL_SIGNATURE|INDEPENDENT_CORROBORATION)$")
     rationale: str = Field(min_length=20, max_length=5000)
     proof_url: str | None = Field(default=None, max_length=2000)
 
 
-class FinanceEventRequest(BaseModel):
+class FinanceEventRequest(RequestModel):
     evidence_id: UUID
     idempotency_key: str = Field(min_length=8, max_length=128)
     stage: str = Field(
@@ -70,14 +94,32 @@ class FinanceEventRequest(BaseModel):
     related_event_id: UUID | None = None
 
 
-class ClaimRequest(BaseModel):
+class ClaimRequest(RequestModel):
     statement: str = Field(min_length=10, max_length=5000)
     evidence_id: UUID
 
 
-class ReviewRequest(BaseModel):
+class ReviewRequest(RequestModel):
     verdict: str = Field(pattern=r"^(SUPPORT|CONTRADICT|INSUFFICIENT)$")
     rationale: str = Field(min_length=20, max_length=5000)
+
+
+@app.exception_handler(SQLAlchemyError)
+async def database_error(request, exc):
+    return JSONResponse(status_code=503, content={"detail": "DATABASE_UNAVAILABLE"})
+
+
+install_problems(app)
+
+
+@app.middleware("http")
+async def security_headers(request, call_next):
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 @app.get("/healthz")
@@ -85,13 +127,27 @@ def health():
     return {"status": "alive", "environment": "controlled_pilot"}
 
 
+@app.get("/v1/admin/whoami")
+def whoami(user: dict = Depends(verified_identity)):
+    return {"subject": user["sub"], "project_id": user["project_id"],
+            "roles": user.get("roles", []), "amr": user.get("amr", []),
+            "acr": user.get("acr"), "auth_time": user.get("auth_time"),
+            "mfa_enforced": settings.oidc_require_mfa}
+
+
+@app.get('/v1/auth/config')
+def browser_auth_config():
+    if not all((settings.oidc_issuer, settings.oidc_jwks_url, settings.oidc_audience)) or not https_endpoint(settings.oidc_issuer):
+        raise HTTPException(503, 'OIDC_NOT_CONFIGURED')
+    return {'issuer': settings.oidc_issuer, 'client_id': os.getenv('IGES_OIDC_WEB_CLIENT_ID', 'iges-web'),
+            'audience': settings.oidc_audience, 'flow': 'authorization_code_pkce', 'mfa_required': settings.oidc_require_mfa}
+
+
 @app.get("/readyz")
 def ready():
     try:
-        with tenant_session() as session:
-            session.execute(text("SELECT 1 FROM projects LIMIT 1")).all()
-            session.execute(text("SELECT 1 FROM evidence LIMIT 1")).all()
-            session.execute(text("SELECT 1 FROM public_awards LIMIT 1")).all()
+        with tenant_session(read_only=True) as session:
+            check_database(session)
         return {"status": "ready"}
     except Exception:
         raise HTTPException(status_code=503, detail="DATABASE_UNAVAILABLE") from None
@@ -125,7 +181,7 @@ def public_observations(
         ) latest
         ORDER BY period DESC, country_code, indicator_code LIMIT :limit
     """)
-    with tenant_session() as session:
+    with tenant_session(read_only=True) as session:
         rows = session.execute(
             query, {"country": country, "indicator": indicator, "limit": limit}
         ).mappings().all()
@@ -135,7 +191,7 @@ def public_observations(
 
 @app.get("/v1/public/observations/{observation_id}/provenance")
 def observation_provenance(observation_id: UUID):
-    with tenant_session() as session:
+    with tenant_session(read_only=True) as session:
         row = session.execute(
             text("""
             SELECT o.id::text AS observation_id, o.source_locator, o.period,
@@ -162,89 +218,68 @@ async def ingest_worldbank(
         raise HTTPException(status_code=422, detail="INDICATOR_NOT_ALLOWED")
     try:
         snapshot = await fetch_snapshot(body.country, body.indicator, body.start, body.end)
-    except (httpx.HTTPError, ValueError, UnicodeDecodeError):
+    except (httpx.HTTPError, ValueError, UnicodeDecodeError, TimeoutError, RecursionError):
         raise HTTPException(status_code=502, detail="UPSTREAM_INVALID_OR_UNAVAILABLE") from None
-    with tenant_session() as session:
-        evidence_id, count, created = store_snapshot(session, snapshot, user["sub"])
+    def persist():
+        with tenant_session() as session:
+            return store_snapshot(session, snapshot, user["sub"])
+    evidence_id, count, created = await run_in_threadpool(persist)
     return {"evidence_id": evidence_id, "inserted_observations": count,
             "new_snapshot": created, "content_sha256": snapshot.sha256,
             "provenance_state": "UNASSESSED"}
 
 
-
 @app.get("/v1/public/awards")
 def public_awards(limit: int = Query(default=50, ge=1, le=100)):
-    """Public contract award totals, explicitly not bank transfers or final expenditure."""
-    with tenant_session() as session:
-        rows = session.execute(
-            text("""
-            SELECT id::text AS id, source_award_key, external_award_id,
-                   recipient_name, awarding_agency, funding_agency,
-                   award_amount::text AS award_amount, currency,
-                   source_locator, source_url, source_request,
-                   retrieved_at, content_sha256, request_sha256,
-                   provenance_state
+    with tenant_session(read_only=True) as session:
+        rows = session.execute(text("""
+            SELECT id::text AS id,source_award_key,external_award_id,recipient_name,
+                   awarding_agency,funding_agency,award_amount::text AS award_amount,currency,
+                   source_locator,source_url,source_request,retrieved_at,content_sha256,
+                   request_sha256,provenance_state
             FROM (
               SELECT DISTINCT ON (a.source_award_key)
-                a.id, a.source_award_key, a.external_award_id, a.recipient_name,
-                a.awarding_agency, a.funding_agency, a.award_amount, a.currency,
-                a.source_locator, e.source_url, e.source_request,
-                e.retrieved_at, e.content_sha256, e.request_sha256, e.provenance_state
-              FROM public_awards a
-              JOIN evidence e ON e.id=a.evidence_id AND e.project_id=a.project_id
-              ORDER BY a.source_award_key, e.retrieved_at DESC, a.id DESC
-            ) recent
-            ORDER BY award_amount DESC NULLS LAST
-            LIMIT :limit
-            """),
-            {"limit": limit},
-        ).mappings().all()
-    return {
-        "count": len(rows),
-        "records": [dict(row) for row in rows],
-        "meaning": "Award Amount as reported by USAspending; NOT a disbursement or proof of downstream spending",
-        "coverage": "Only the bounded source search pages ingested; NOT all US federal awards",
-    }
+                a.*,e.source_url,e.source_request,e.retrieved_at,e.content_sha256,
+                e.request_sha256,e.provenance_state
+              FROM public_awards a JOIN evidence e ON e.id=a.evidence_id AND e.project_id=a.project_id
+              ORDER BY a.source_award_key,e.retrieved_at DESC,a.id DESC
+            ) recent ORDER BY recent.award_amount DESC NULLS LAST,source_award_key LIMIT :limit
+        """), {"limit": limit}).mappings().all()
+    return {"count": len(rows), "records": [dict(row) for row in rows],
+            "meaning": "USAspending award amount, not a verified disbursement or expenditure",
+            "coverage": "Only ingested search pages; not all federal awards"}
 
 
 @app.get("/v1/public/awards/{award_id}/provenance")
 def award_provenance(award_id: UUID):
-    with tenant_session() as session:
-        row = session.execute(
-            text("""
-            SELECT a.id::text AS award_record_id, a.source_locator,
-                   e.id::text AS evidence_id, e.provider, e.source_url,
-                   e.source_request, e.retrieved_at, e.content_sha256,
-                   e.request_sha256, e.provenance_state
-            FROM public_awards a
-            JOIN evidence e ON e.id=a.evidence_id AND e.project_id=a.project_id
+    with tenant_session(read_only=True) as session:
+        row = session.execute(text("""
+            SELECT a.id::text AS award_record_id,a.source_locator,e.id::text AS evidence_id,
+                   e.provider,e.source_url,e.source_request,e.retrieved_at,e.content_sha256,
+                   e.request_sha256,e.provenance_state
+            FROM public_awards a JOIN evidence e ON e.id=a.evidence_id AND e.project_id=a.project_id
             WHERE a.id=:id
-            """),
-            {"id": str(award_id)},
-        ).mappings().first()
+        """), {"id": str(award_id)}).mappings().first()
     if row is None:
         raise HTTPException(status_code=404, detail="AWARD_NOT_FOUND")
     return dict(row)
 
 
 @app.post("/v1/admin/ingest/usaspending")
-async def ingest_usaspending(
-    body: AwardIngestRequest, user: dict = Depends(require_role("ingestor"))
-):
+async def ingest_usaspending(body: AwardIngestRequest, user: dict = Depends(require_role("ingestor"))):
     try:
         snapshot = await fetch_awards(body.fiscal_year, body.limit)
-    except (httpx.HTTPError, ValueError, UnicodeDecodeError):
+    except (httpx.HTTPError, ValueError, UnicodeDecodeError, TimeoutError, RecursionError):
         raise HTTPException(status_code=502, detail="UPSTREAM_INVALID_OR_UNAVAILABLE") from None
-    with tenant_session() as session:
-        evidence_id, count, created = store_awards(session, snapshot, user["sub"])
-    return {
-        "evidence_id": evidence_id, "awards_inserted": count,
-        "new_snapshot": created, "content_sha256": snapshot.sha256,
-        "request_sha256": snapshot.request_sha256,
-        "has_next_page": snapshot.has_next_page,
-        "provenance_state": "UNASSESSED",
-        "meaning": "Published award amount, not verified paid transfer",
-    }
+
+    def persist():
+        with tenant_session() as session:
+            return store_awards(session, snapshot, user["sub"])
+
+    evidence_id, count, created = await run_in_threadpool(persist)
+    return {"evidence_id": evidence_id, "awards_inserted": count, "new_snapshot": created,
+            "content_sha256": snapshot.sha256, "request_sha256": snapshot.request_sha256,
+            "has_next_page": snapshot.has_next_page, "provenance_state": "UNASSESSED"}
 
 
 @app.post("/v1/admin/evidence/{evidence_id}/attest")
@@ -252,7 +287,7 @@ def attest_evidence(
     evidence_id: UUID, body: AttestationRequest,
     user: dict = Depends(require_role("reviewer"))
 ):
-    if body.proof_url is not None and not body.proof_url.startswith("https://"):
+    if body.proof_url is not None and not https_endpoint(body.proof_url):
         raise HTTPException(status_code=422, detail="PROOF_URL_HTTPS_REQUIRED")
     with tenant_session() as session:
         found = session.execute(
@@ -287,6 +322,8 @@ def add_financial_event(
     if amount <= 0:
         raise HTTPException(status_code=422, detail="AMOUNT_MUST_BE_POSITIVE")
     with tenant_session() as session:
+        session.execute(text("SELECT pg_advisory_xact_lock(hashtextextended(:key,0))"),
+                        {"key": "iges-finance:" + str(settings.project_id)})
         prior = session.execute(
             text("SELECT * FROM financial_events WHERE idempotency_key=:key"),
             {"key": body.idempotency_key},
@@ -345,21 +382,9 @@ def add_financial_event(
                 "note": "Recorded as sourced event; not automatically treated as a verified transfer"}
 
 
-@app.post("/v1/admin/claims")
+@app.post("/v1/admin/claims", deprecated=True)
 def create_claim(body: ClaimRequest, user: dict = Depends(require_role("analyst"))):
-    with tenant_session() as session:
-        found = session.execute(
-            text("SELECT 1 FROM evidence WHERE id=:eid"), {"eid": str(body.evidence_id)}
-        ).first()
-        if not found:
-            raise HTTPException(status_code=404, detail="EVIDENCE_NOT_FOUND")
-        claim_id = session.execute(
-            text("INSERT INTO claims (project_id,evidence_id,statement,submitted_by) "
-                 "VALUES (current_setting('iges.project_id')::uuid,:eid,:statement,:actor) RETURNING id"),
-            {"eid": str(body.evidence_id), "statement": body.statement, "actor": user["sub"]},
-        ).scalar_one()
-        append_audit(session, user["sub"], "CLAIM_SUBMITTED", str(claim_id))
-        return {"claim_id": str(claim_id), "state": "UNASSESSED", "published": False}
+    raise HTTPException(410, 'USE_CASE_SCOPED_CLAIMS_WITH_PERIOD_AND_JURISDICTION')
 
 
 @app.post("/v1/admin/claims/{claim_id}/reviews")
@@ -377,8 +402,9 @@ def review_claim(
             raise HTTPException(status_code=403, detail="SELF_REVIEW_FORBIDDEN")
         if body.verdict == "SUPPORT":
             is_attested = session.execute(
-                text("SELECT 1 FROM evidence_attestations WHERE evidence_id=:eid LIMIT 1"),
-                {"eid": str(claim["evidence_id"])},
+                text("SELECT 1 FROM evidence_attestations WHERE evidence_id=:eid "
+                     "AND attester_sub <> :author LIMIT 1"),
+                {"eid": str(claim["evidence_id"]), "author": claim["submitted_by"]},
             ).first()
             if not is_attested:
                 raise HTTPException(status_code=409, detail="ORIGIN_ATTESTATION_REQUIRED")

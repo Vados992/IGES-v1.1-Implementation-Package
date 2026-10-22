@@ -11,7 +11,7 @@
         X-Frame-Options "DENY"
     }
 
-    @restricted path /v1/admin/* /docs /redoc /openapi.json
+    @restricted path /v1/admin/* /v1/cases* /v1/auth/* /workspace /publication /v1/public/publications* /v1/public/cases* /docs /redoc /openapi.json
     respond @restricted 404
 
     reverse_proxy api:8000

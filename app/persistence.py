@@ -19,26 +19,28 @@ def append_audit(session: Session, actor: str, action: str, subject: str) -> str
         text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
         {"key": f"iges-audit:{project_id}"},
     )
-    previous = session.execute(
-        text("SELECT entry_hash FROM audit_events WHERE project_id=:pid "
-             "ORDER BY occurred_at DESC, id DESC LIMIT 1"),
+    prior = session.execute(
+        text("SELECT sequence,entry_hash FROM audit_events WHERE project_id=:pid "
+             "ORDER BY sequence DESC LIMIT 1"),
         {"pid": project_id},
-    ).scalar_one_or_none() or ("0" * 64)
+    ).mappings().first()
+    previous = prior["entry_hash"] if prior else "0" * 64
+    sequence = prior["sequence"] + 1 if prior else 1
     event_id = str(uuid4())
     at = datetime.now(timezone.utc)
     canon = json.dumps(
-        {"id": event_id, "project": project_id, "actor": actor,
+        {"id": event_id, "project": project_id, "sequence": sequence, "actor": actor,
          "action": action, "subject": subject, "timestamp": at.isoformat()},
         sort_keys=True, separators=(",", ":"),
     )
     digest = hashlib.sha256((previous + canon).encode("utf-8")).hexdigest()
     session.execute(
         text("INSERT INTO audit_events "
-             "(id,project_id,actor_sub,action,subject_id,occurred_at,previous_hash,entry_hash) "
-             "VALUES (:id,:pid,:actor,:action,:subject,:at,:previous,:digest)"),
+             "(id,project_id,sequence,actor_sub,action,subject_id,occurred_at,previous_hash,entry_hash,canonical_payload) "
+             "VALUES (:id,:pid,:sequence,:actor,:action,:subject,:at,:previous,:digest,:canon)"),
         {"id": event_id, "pid": project_id, "actor": actor,
          "action": action, "subject": subject, "at": at,
-         "previous": previous, "digest": digest},
+         "previous": previous, "digest": digest, "sequence": sequence, "canon": canon},
     )
     return event_id
 

@@ -1,80 +1,111 @@
-# IGES v1.1 — Implementation Package (controlled pilot)
+# IGES — controlled evidence-workflow MVP
 
-Independent Geopolitical Evidence System. Evidence-centric research into public international financing and political claims. **No model-produced assessment is a finding of political control or wrongdoing.**
+An executable, single-project research workspace with actual World Bank and
+USAspending adapters. Source-attributed records and human-reviewed conclusions
+have different states. No source observations or substantive human approvals are
+fabricated or bundled. This repository is **not production-certified**.
 
-## Current state
+## What runs
 
-This repository contains an **executable, single-project controlled pilot**, not a certified public investigation platform. Real-data integrations: World Bank Indicators API v2 and USAspending.gov federal award search. Records are retained with raw response bytes, SHA-256 digests, API retrieval URLs, timestamps, and precise observation locators. No real records are fabricated or bundled.
+- FastAPI/OpenAPI, PostgreSQL 16, forced project RLS and append-only runtime grants.
+- Cases with revision history, scoped claims, falsifiable hypotheses, source
+  catalogue, unchanged originals, page text, exact quotations, entities and
+  evidenced relationships. Manual identity aliases can be undone without deletion.
+- Assigned independent reviews, conflict declarations, irreversible withdrawal,
+  revision-bound legal/privacy veto and right-of-reply gates.
+- Immutable versioned publication manifests, corrections/retractions, public
+  reader, reproducible JSON/CSV and SHA-256 verification.
+- RU/EN analyst workspace, browser Authorization Code + PKCE, signed OIDC/MFA
+  validation, per-case membership and revocation. Administrators cannot publish
+  or change evidence merely by having an administrator role.
+- Separate ClamAV/Tesseract/Poppler worker. Failed, pending and quarantined files
+  cannot supply evidence or be downloaded through the original endpoint.
+- Content seals tied to the existing verifiable audit chain; transactional
+  idempotency receipts, optimistic revision checks and RFC 9457 errors.
 
-Capabilities:
-- PostgreSQL with row-level security (RLS), immutable evidence and financial event tables, ledger constraints, and an auditable change trail.
-- Explicit provenance states; real source data remain *unreviewed* until independent verification.
-- Public read-only economic observation API (no political findings), configurable OIDC-protected administrative API.
-- Deterministic financial aggregate semantics and two-person separation for claim review.
-- Optional command-line ingestion using the real World Bank API.
-- Docker Compose, unit/security tests, CI workflow, security and operations guides.
+Exact acceptance evidence and remaining limits: [FR-01–FR-16 status](docs/FR_STATUS.md).
+Architecture choices: [MVP ADR](docs/ADR_EVIDENCE_MVP.md).
+Operator/reviewer workflow: [workspace guide](docs/WORKSPACE.md).
 
-## Local startup
+## Isolated startup
 
-Requires Docker Compose v2. **Do not expose port 8000 publicly without TLS, an identity provider, production monitoring and legal review.**
+Use a new Compose project for evaluation; preserve all existing volumes.
 
 ```sh
 cp .env.example .env
-# Replace BOTH password placeholders with distinct strong passwords.
-docker compose up --build -d
-docker compose ps
-curl http://127.0.0.1:8000/healthz
-curl http://127.0.0.1:8000/v1/public/observations
+# Configure two distinct random passwords (24+ characters) and a project UUID.
+# Configure your actual OIDC issuer/audience/JWKS and the public iges-web client.
+docker compose -p iges-evidence-eval --profile intake up --build --wait
 ```
 
-First run initializes a PostgreSQL database with a separate non-superuser `iges_runtime` role. Existing database volumes are not automatically reinitialized after configuration changes.
+The API binds to `127.0.0.1:8000`; PostgreSQL and ClamAV have no published ports.
+`/workspace` is the analyst UI; `/docs` and [saved OpenAPI](docs/openapi.json)
+describe the API. Privileged requests fail closed without a configured IdP and
+signed MFA claims. Browser SSO needs an approved HTTPS origin/redirect URI at
+the IdP. Publication defaults to **disabled** (`IGES_ENABLE_PUBLICATION=false`).
+Enabling that operator switch never bypasses current-revision human gates.
 
-## Fetch actual source records
+For the existing native installation and personal enrollment boundary, see
+[Windows pilot](docs/WINDOWS_LOCAL_PILOT.md). Do not copy private state to a new
+checkout. Its working database, accounts, certificates and keys are not changed
+by this branch. Windows OCR needs separately installed trusted tools/scanner;
+the Compose intake profile provides the tested processing environment.
+
+## Upgrade existing data
+
+Fresh bootstrap applies schema **v5** in one transaction. Normal application
+startup does not migrate. After a verified backup, an administrator can inspect
+and explicitly apply the transactional v2/v3/v4 → v5 migrations:
 
 ```sh
-docker compose run --rm api python -m app.seed_worldbank \
+# Set IGES_MIGRATION_DATABASE_URL privately with administration credentials.
+python -m app.migrate
+python -m app.migrate --apply
+# Run with the restricted runtime configuration after migration:
+python -m app.verify_integrity
+```
+
+Original bytes, existing financial records, identities/project bindings and audit
+history are preserved. Unversioned/v1 installations require a separately reviewed
+migration. Never delete a working volume to upgrade. See [operations](docs/OPERATIONS.md).
+
+## Actual official data
+
+```sh
+docker compose -p iges-evidence-eval run --rm api python -m app.seed_worldbank \
   --country PRT --indicator SP.POP.TOTL --start 2022 --end 2024
-curl "http://127.0.0.1:8000/v1/public/observations?country=PRT&indicator=SP.POP.TOTL"
+docker compose -p iges-evidence-eval run --rm api python -m app.seed_usaspending \
+  --fiscal-year 2025 --limit 5
+docker compose -p iges-evidence-eval exec -T api python -m app.verify_integrity
 ```
 
-The command makes a **live** HTTPS request to the official World Bank V2 API and stores the original response and its hash. Network access is required at runtime. The retrieved data are marked `UNASSESSED`; they are facts *attributed to the source*, not independently verified truth. Data may have revisions and missing values.
+These commands require actual upstream access and fail visibly without it. They
+store exact responses, request digests and locators. Missing monetary/statistical
+values stay null. Award amounts never become assumed cash payments. Imports are
+bounded pages, not exhaustive datasets; all source records remain `UNASSESSED`.
 
-Financial-source import (public procurement award totals, **not disbursements**):
-
-```sh
-docker compose run --rm api python -m app.seed_usaspending --fiscal-year 2024 --limit 10
-curl http://127.0.0.1:8000/v1/public/awards
-```
-
-Only the selected search page is imported; do not treat the result as exhaustive financial records.
-
-Other allowlisted indicators: `NY.GDP.MKTP.CD` (GDP current US$) and `GC.DOD.TOTL.GD.ZS` (central government debt % GDP, where available). Indicator absence is reported rather than filled in.
-
-## API
-
-- `GET /healthz`, `GET /readyz`
-- `GET /v1/public/observations?country=PRT&indicator=SP.POP.TOTL&limit=50`
-- `GET /v1/public/observations/{id}/provenance`
-- `GET /v1/public/awards`, `GET /v1/public/awards/{id}/provenance`
-- `POST /v1/admin/ingest/worldbank` (OIDC role `ingestor`)
-- `POST /v1/admin/ingest/usaspending` (OIDC role `ingestor`)
-- `POST /v1/admin/financial/events` (OIDC role `analyst`)
-- `POST /v1/admin/claims` (OIDC role `analyst`)
-- `POST /v1/admin/claims/{id}/reviews` (OIDC role `reviewer`)
-- Interactive OpenAPI docs: `/docs`.
-
-Admin APIs fail closed if issuer, audience or JWKS URL are not configured. There is **no development bypass** or hard-coded bearer token. Machine-origin ingestion via CLI is for trusted shell operators only.
-
-## Test
+## Verification
 
 ```sh
-python -m pip install -r requirements.txt
+python -m pip install -r requirements-dev.txt
+ruff check app tests scripts
 pytest -q
-ruff check app tests
+bandit -r app
+pip-audit -r requirements.txt
 ```
 
-See `docs/SECURITY.md` and `docs/OPERATIONS.md` for limits, access architecture, threat scenarios, backup/recovery and outstanding production gates.
+Without `IGES_TEST_ADMIN_URL`, integration tests explicitly skip. CI executes real
+PostgreSQL integration/migration/restore tests, live World Bank/USAspending imports,
+actual RFC Editor PDF + image OCR + EICAR quarantine, and actual isolated Keycloak
+password/OTP/PKCE checks for desktop and web clients. Test identities and approval
+fixtures exist only in disposable test environments. The guarded UI harness is
+not part of application authentication or the container's runtime entry point.
 
-**Not completed:** third-party security audit, GDPR/DPIA review, confidential-source vault, independent external timestamp anchoring, full causal-inference engine, bank-data integration, universal entity resolution, provider-backed infrastructure, benchmarked RPO/RTO, independent public accusation publication, production runbooks and incident drills. Those are deliberate NO-GO gates, not assumed protections.
+The optional public-data gateway blocks the workspace, private case routes,
+authentication configuration and publication routes. Its default scope remains
+public-source observations/awards only; see [public pilot deployment](docs/PUBLIC_PILOT_DEPLOYMENT.md).
 
-Data source: https://datahelpdesk.worldbank.org/knowledgebase/articles/889392-about-the-indicators-api-documentation
+External legal/privacy review, independent security assessment, protected hosting,
+encrypted storage/backups and key custody, external audit anchors, measured recovery,
+real reviewer enrollment and operational pilot acceptance remain explicit
+[NO-GO gates](docs/PRODUCTION_GATES.md).
