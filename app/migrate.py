@@ -6,8 +6,8 @@ from pathlib import Path
 
 from sqlalchemy import create_engine, text
 
-SCHEMA_VERSION = 3
-MIGRATION = Path(__file__).resolve().parents[1] / "db/migrations/003_award_provenance.sql"
+SCHEMA_VERSION = 4
+MIGRATIONS = Path(__file__).resolve().parents[1] / 'db/migrations'
 
 
 def upgrade(connection):
@@ -15,9 +15,13 @@ def upgrade(connection):
     version = connection.execute(text("SELECT version FROM schema_version")).scalar_one()
     if version == SCHEMA_VERSION:
         return False
-    if version != 2:
-        raise RuntimeError("Only a verified schema v2 database can be upgraded")
-    connection.exec_driver_sql(MIGRATION.read_text(encoding="utf-8"))
+    if version not in (2, 3):
+        raise RuntimeError("Only a verified schema v2 or v3 database can be upgraded")
+    if version == 2:
+        connection.exec_driver_sql((MIGRATIONS / '003_award_provenance.sql').read_text(encoding='utf-8'),
+                                   execution_options={'no_parameters': True})
+    connection.exec_driver_sql((MIGRATIONS / '004_evidence_workflow.sql').read_text(encoding='utf-8'),
+                               execution_options={'no_parameters': True})
     return True
 
 

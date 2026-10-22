@@ -33,7 +33,7 @@ def test_v2_upgrade_preserves_source_and_audit():
             legacy = legacy.replace(":'project_id'", "'" + str(settings.project_id) + "'")
             legacy = legacy.replace(":DBNAME", '"' + name + '"')
             with migrated.begin() as connection:
-                connection.exec_driver_sql(legacy)
+                connection.exec_driver_sql(legacy, execution_options={'no_parameters': True})
             raw = fixture_raw(value=None)
             eid = str(uuid4())
             source = "https://api.worldbank.org/v2/country/PRT/indicator/SP.POP.TOTL?format=json&date=2024:2024&per_page=100"
@@ -53,7 +53,7 @@ def test_v2_upgrade_preserves_source_and_audit():
                 assert {key: after[key] for key in before} == before
                 assert dict(connection.execute(text("SELECT * FROM audit_events")).mappings().one()) == audit_before
                 assert after["request_sha256"] == hashlib.sha256(("GET " + source).encode()).hexdigest()
-                assert connection.execute(text("SELECT version FROM schema_version")).scalar_one() == 3
+                assert connection.execute(text("SELECT version FROM schema_version")).scalar_one() == 4
                 protected = connection.execute(text(
                     "SELECT relrowsecurity AND relforcerowsecurity FROM pg_class WHERE relname='public_awards'"
                 )).scalar_one()

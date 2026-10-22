@@ -106,7 +106,7 @@ def parse_awards(raw: bytes, request: dict, url: str = URL) -> AwardSnapshot:
             raise ValueError("invalid award amount") from exc
         if amount is not None and (not amount.is_finite() or amount.adjusted() >= 28):
             raise ValueError("award amount outside numeric bounds")
-        def optional_text(name):
+        def optional_text(name, row=row):
             value = row.get(name)
             if value is not None and (not isinstance(value, str) or len(value) > 5000):
                 raise ValueError("invalid award text field")

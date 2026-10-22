@@ -62,7 +62,7 @@ jobs:
           docker compose exec -T db sh -c 'psql -U postgres -d iges -c "CREATE DATABASE iges_restore"'
           docker compose run --rm -v "$PWD/tests:/opt/iges/tests:ro" -v "$PWD/pyproject.toml:/opt/iges/pyproject.toml:ro" \
             -e IGES_TEST_ADMIN_URL="$(cat work/ci-admin-url)" \
-            --user root api sh -c 'pip install --no-cache-dir --target /tmp/testdeps pytest==9.1.1 && PYTHONPATH=/tmp/testdeps:/opt/iges python -m pytest -q -p no:cacheprovider -m integration tests/test_postgres_integration.py'
+            --user root api sh -c 'pip install --no-cache-dir --target /tmp/testdeps pytest==9.1.1 && PYTHONPATH=/tmp/testdeps:/opt/iges python -m pytest -q -p no:cacheprovider -m integration tests'
       - name: HTTP smoke and missing OIDC denial
         run: python scripts/http_smoke.py
       - name: Restart existing volume without repeating initialization
@@ -101,6 +101,7 @@ jobs:
           python scripts/ci_env.py
           docker compose up --build --wait --wait-timeout 180
           docker compose run --rm api python -m app.seed_worldbank --country PRT --indicator SP.POP.TOTL --start 2022 --end 2024 | tee work/live-worldbank/database-import.json
+          docker compose run --rm api python -m app.seed_usaspending --fiscal-year 2025 --limit 5 | tee work/live-worldbank/usaspending-import.json
           docker compose exec -T api python -m app.verify_integrity | tee work/live-worldbank/database-integrity.json
           python -m scripts.verify_live_api
       - uses: actions/upload-artifact@v4
@@ -115,3 +116,30 @@ jobs:
       - name: Remove disposable live-source database
         if: always()
         run: docker compose down --volumes --remove-orphans
+  intake:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install -r requirements.txt
+      - name: Fetch actual primary document without fallback
+        run: python -m scripts.fetch_intake_source
+      - run: python scripts/ci_env.py
+      - name: Start isolated PostgreSQL, ClamAV and OCR worker
+        run: docker compose --profile intake up --build --wait --wait-timeout 900
+      - name: Real PDF, OCR, hash and search pipeline
+        run: |
+          docker compose stop worker
+          docker compose run --rm -v "$PWD/scripts:/opt/iges/scripts:ro" -v "$PWD/work/intake-source:/source:ro" \
+            -e IGES_TEST_SOURCE_DIR=/source -e IGES_TEST_ADMIN_URL=isolated-ci-intake-only \
+            worker python -m scripts.intake_e2e
+          docker compose exec -T api python -m app.verify_integrity
+      - name: Diagnostics
+        if: failure()
+        run: docker compose --profile intake logs --tail 80
+      - name: Remove only this job's disposable volumes
+        if: always()
+        run: docker compose --profile intake down --volumes --remove-orphans

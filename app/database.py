@@ -22,6 +22,9 @@ _init_lock = Lock()
 PROTECTED_TABLES = (
     "projects", "evidence", "observations", "public_awards", "financial_events", "claims",
     "reviews", "audit_events", "evidence_attestations",
+    'cases', 'case_members', 'case_events', 'hypotheses', 'sources', 'documents', 'document_pages',
+    'document_processing', 'evidence_items', 'entities', 'relationships', 'review_assignments',
+    'assessments', 'publication_gates', 'responses', 'publications', 'write_receipts', 'integrity_incidents', 'record_seals',
 )
 
 

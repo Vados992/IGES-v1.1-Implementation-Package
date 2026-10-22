@@ -23,6 +23,8 @@ from app.middleware import BodyLimitMiddleware
 from app.persistence import append_audit, store_snapshot, store_awards
 from app.usaspending import fetch_awards, MAX_FISCAL_YEAR
 from app.worldbank import ALLOWED_INDICATORS, fetch_snapshot
+from app.workflow import router as workflow_router
+from app.problems import install as install_problems
 
 app = FastAPI(
     title="IGES v1.1 Controlled Pilot",
@@ -30,6 +32,7 @@ app = FastAPI(
     description="Source-attributed public economic records; no automated political verdicts.",
 )
 app.add_middleware(BodyLimitMiddleware, max_bytes=65536)
+app.include_router(workflow_router)
 
 STATIC_DIR = Path(__file__).parent / "static"
 app.mount("/assets", StaticFiles(directory=STATIC_DIR), name="assets")
@@ -90,6 +93,9 @@ class ReviewRequest(RequestModel):
 @app.exception_handler(SQLAlchemyError)
 async def database_error(request, exc):
     return JSONResponse(status_code=503, content={"detail": "DATABASE_UNAVAILABLE"})
+
+
+install_problems(app)
 
 
 @app.middleware("http")

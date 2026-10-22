@@ -1,5 +1,5 @@
 """Bound request bodies, including requests without Content-Length."""
-from starlette.responses import JSONResponse
+from app.problems import problem
 
 
 class BodyLimitMiddleware:
@@ -11,13 +11,14 @@ class BodyLimitMiddleware:
         if scope["type"] != "http":
             return await self.app(scope, receive, send)
         body = bytearray()
+        limit = 8388608 if scope['path'].startswith('/v1/cases/') and scope['path'].endswith('/documents') else self.max_bytes
         while True:
             message = await receive()
             if message["type"] == "http.disconnect":
                 return
             body.extend(message.get("body", b""))
-            if len(body) > self.max_bytes:
-                response = JSONResponse({"detail": "REQUEST_TOO_LARGE"}, status_code=413)
+            if len(body) > limit:
+                response = problem(413, 'REQUEST_TOO_LARGE')
                 return await response(scope, receive, send)
             if not message.get("more_body", False):
                 break

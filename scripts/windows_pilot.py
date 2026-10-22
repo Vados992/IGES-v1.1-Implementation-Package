@@ -148,7 +148,8 @@ def setup():
         run([*psql, "-d", "postgres"], input=init, text=True, env=environment, capture_output=True)
         template = (REPO / "db/init/01_schema.template").read_text()
         variables = f"\\set runtime_password '{config['runtime_password']}'\n\\set project_id '{config['project_id']}'\n"
-        run([*psql, "-d", "iges", "--single-transaction"], input=variables + template + (REPO / "db/migrations/003_award_provenance.sql").read_text(),
+        migrations = ''.join('\n' + path.read_text() for path in sorted((REPO / 'db/migrations').glob('*.sql')))
+        run([*psql, "-d", "iges", "--single-transaction"], input=variables + template + migrations,
             text=True, env=environment, capture_output=True)
         (STATE / "database-initialized").touch()
     imported = identity / "data/import"

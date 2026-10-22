@@ -1,5 +1,6 @@
 services:
   db:
+    networks: [datastore]
     image: postgres:16
     restart: unless-stopped
     environment:
@@ -20,6 +21,7 @@ services:
     security_opt:
       - no-new-privileges:true
   api:
+    networks: [default, datastore]
     build: .
     restart: unless-stopped
     depends_on:
@@ -35,6 +37,7 @@ services:
       IGES_OIDC_REQUIRE_MFA: ${IGES_OIDC_REQUIRE_MFA:-true}
       IGES_OIDC_REQUIRED_ACR: ${IGES_OIDC_REQUIRED_ACR:-}
       IGES_OIDC_MAX_AUTH_AGE: ${IGES_OIDC_MAX_AUTH_AGE:-900}
+      IGES_ENABLE_PUBLICATION: ${IGES_ENABLE_PUBLICATION:-false}
     ports:
       - "127.0.0.1:8000:8000"
     read_only: true
@@ -50,5 +53,46 @@ services:
       timeout: 5s
       retries: 12
       start_period: 10s
+  clamav:
+    image: clamav/clamav:stable
+    profiles: [intake]
+    networks: [default, scanner]
+    volumes:
+      - clamav_signatures:/var/lib/clamav
+    healthcheck:
+      test: ["CMD", "clamdscan", "--ping", "1"]
+      interval: 20s
+      timeout: 10s
+      retries: 30
+      start_period: 60s
+    mem_limit: 2g
+    security_opt: [no-new-privileges:true]
+  worker:
+    profiles: [intake]
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    depends_on:
+      db: {condition: service_healthy}
+      clamav: {condition: service_healthy}
+    networks: [datastore, scanner]
+    environment:
+      IGES_DB_PASSWORD: ${IGES_DB_PASSWORD:?set runtime secret in .env}
+      IGES_DB_HOST: db
+      IGES_PUBLIC_PROJECT_ID: ${IGES_PUBLIC_PROJECT_ID:?set pilot project id in .env}
+      IGES_CLAMD_HOST: clamav
+      IGES_OCR_LANGUAGES: ${IGES_OCR_LANGUAGES:-eng}
+    read_only: true
+    tmpfs: [/tmp:size=128m,noexec,nosuid]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 1500m
+    cpus: 1
+    pids_limit: 64
+    restart: unless-stopped
+networks:
+  datastore: {internal: true}
+  scanner: {internal: true}
 volumes:
+  clamav_signatures:
   iges_db:

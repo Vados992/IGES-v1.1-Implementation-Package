@@ -13,6 +13,7 @@ from sqlalchemy import text
 from app.database import tenant_session, check_database
 from app.worldbank import parse_snapshot
 from app.usaspending import parse_awards, canonical_request
+from app.record_integrity import verify_workspace
 
 
 def verify_audit_rows(rows) -> int:
@@ -72,6 +73,7 @@ def verify_integrity(export_dir: Path | None = None) -> dict:
                 raise ValueError(f"observation locator/value mismatch: {row['id']}")
         rows = session.execute(text("SELECT * FROM audit_events ORDER BY sequence")).mappings().all()
         count = verify_audit_rows(rows)
+        workspace = verify_workspace(session, rows)
     if export_dir is not None:
         export_dir.mkdir(parents=True, exist_ok=True)
         for row in evidence:
@@ -79,7 +81,7 @@ def verify_integrity(export_dir: Path | None = None) -> dict:
             receipt = {key: row[key] for key in ["provider", "content_sha256", "request_sha256", "source_request", "source_url"]}
             receipt.update(evidence_id=str(row["id"]), retrieved_at=row["retrieved_at"].isoformat())
             (export_dir / f"{row['id']}.receipt.json").write_text(json.dumps(receipt, indent=2), encoding="utf-8")
-    return {"evidence_hashes_checked": len(evidence), "audit_entries_checked": count,
+    return {**workspace, "evidence_hashes_checked": len(evidence), "audit_entries_checked": count,
             "status": "INTERNALLY_CONSISTENT", "externally_anchored": False}
 
 
