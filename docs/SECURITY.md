@@ -1,60 +1,70 @@
-# IGES security model — implementation boundaries
+# Security boundary of the evidence MVP
 
-## Verified prerequisites / trust boundaries
+The application is a controlled **single-project, public-source** pilot. No
+confidential-source vault, hostile tenant isolation, legal certification or
+production security assurance is claimed.
 
-The pilot handles **only public World Bank economic indicators** in a single configured project. It does not solicit or retain confidential whistleblower identities. Do not upload confidential identities or classified material into this pilot.
+## Implemented controls
 
-Internet clients never send arbitrary fetch URLs. The World Bank adapter constructs an HTTPS URL from a three-letter country, a strict allowlist of indicator IDs and bounded years. Redirects are disabled, response sizes and row counts are bounded, and both metadata and country/indicator/year identity are checked.
+- Privileged requests verify OIDC signature/JWKS over verified HTTPS, issuer,
+  audience, expiry, subject, project, typed roles, signed MFA and recent authentication.
+  Missing configuration fails closed. Browser and desktop use Authorization Code
+  + PKCE; their password grants/service accounts are disabled.
+- A current IdP role and unrevoked per-case membership are required. Authors of
+  claims/evidence/documents/hypotheses cannot review their own material. Assigned
+  reviewers declare conflicts; SQL also enforces independence/revision/quotation
+  prerequisites. Author withdrawal is terminal.
+- Runtime login is non-superuser/NOBYPASSRLS and administrator-bound to one project.
+  Forced RLS requires that binding and transaction context. Runtime has SELECT/INSERT,
+  no UPDATE/DELETE/TRUNCATE on the trail. The DB does not authenticate individual JWT
+  subjects: case authorization is an API boundary. Never expose shared DB credentials
+  to end users or treat them as a hostile-tenant isolation mechanism.
+- Original/page hashes, foreign keys, quote-on-page constraints, content seals and
+  audit sequencing detect corruption. The verifier checks both official adapters'
+  raw values/locators, workspace content/seals, revisions, manifests and audit linkage.
+- An 8 MiB original limit and separate child/worker constrain parsing by time, CPU,
+  memory, archive expansion/depth/path and image pixels. Original downloads require
+  successful actual ClamAV scan and extraction. Children receive no DB credentials.
+  Compose worker has read-only root, no capabilities and internal networks; scanner
+  can update signatures through its separate network attachment.
+- No arbitrary URL ingestion exists. Official adapters construct allowlisted HTTPS
+  requests, reject redirects, bound bytes/records and retain nulls. Catalogue URLs
+  are metadata, never fetched by parsers.
+- Core writes have atomic idempotency receipts and audited content. If-Match rejects
+  stale revisions. A content revision invalidates substantive approvals. Publication
+  is off by default and requires current review, legal/privacy, reply and disputed-case
+  panel gates. Published versions are immutable.
+- Bearer auth uses no session cookies. Source text is rendered as text under CSP.
+  Access tokens stay in memory; temporary PKCE state/verifier is deleted on callback.
+  Originals use attachment/nosniff headers and never appear publicly.
+- JSON bodies are bounded to 64 KiB; original uploads to 8 MiB. Bounded per-process
+  rate limits return RFC 9457 HTTP 429. Structured request logs include generated
+  trace IDs, method/status/duration, not paths, queries, tokens or document text.
+  Default API access logging is disabled.
+- Public-source gateway blocks workspace/case/publication/auth routes. No AI service
+  is deployed; source importers cannot assign findings or approve publication.
+  Any future AI needs separate suggestion-only permissions and threat review.
 
-All privileged API methods require a validated issuer, audience, expiry, `sub`, project claim and role from OIDC JWKS. With no issuer configuration, writes return HTTP 503; no hardcoded administrative token or bypass exists. Privileged users should use phishing-resistant MFA at the identity provider, which must be independently verified.
+## Residual risks and deployment gates
 
-The runtime principal is not a superuser and has no BYPASSRLS. Tables use forced
-RLS and append-only grants. Policies require both the transaction-local project
-context and an administrator-owned mapping of `session_user` to the pilot project;
-changing the session context cannot grant access to another project. Read endpoints
-use read-only transactions. The runtime cannot read or change its project mapping.
-This is still a single-project pilot: hostile multi-tenant deployment requires an
-independent RLS/BOLA assessment and a complete identity/provisioning design.
+An administrator can rewrite a local DB and audit chain; internal hashing is not
+an independent timestamp, signature or external anchor. PostgreSQL originals are
+not S3 Object Lock. Host encryption/KMS, encrypted immutable offsite backups,
+signed artifacts, external anchors and key rotation need operational provisioning
+and independent validation. Legal erasure/retention requires an approved controller
+process; no unaudited destructive erasure API is supplied.
 
-Evidence stores source raw bytes and SHA-256. A checksum does not establish truthful content; attestation of official origin is different from claim verification. Reviews cannot be submitted by a claim's author, and there is no public allegation-publishing endpoint.
+Native Windows child processing has fewer OS controls than Linux. Use the tested
+isolated worker before hostile uploads. Confinement is not a complete VM sandbox or
+penetration-test result. ClamAV cannot prove safety/authenticity. OCR confidence is
+an engine signal, not calibrated factual probability; low-confidence quotations
+require a human page-image comparison.
 
-## Threat scenarios and expected behavior
+Full target capacity/availability, distributed WAF/rate limiting, centralized
+alerts, offsite recovery/PITR, package/image supply-chain attestations and independent
+adversarial testing are not certified by bounded CI. Continue advisory scans;
+selected SQL/subprocess scan exclusions concern fixed allowlisted identifiers and
+argument arrays, not broad vulnerability suppression.
 
-| Threat | Pilot control | Residual limitation |
-| --- | --- | --- |
-| Forged upstream JSON | Shape / identity validation and source URL allowlist | Source itself could be wrong or compromised |
-| Prompt injection | No LLM execution or agent tools in deployed pilot | Red-team any later AI addition |
-| IDOR/BOLA | Fixed project and forced RLS | Multi-project verification not completed |
-| Credential theft | Strict OIDC validation; MFA must be configured externally | IdP configuration unverified |
-| Insider tampering | Append-only runtime grants; per-project hash-chained events | Superuser control, no independent anchor |
-| Source deanonymization | No confidential-source ingestion | Dedicated vault and DPIA required |
-| Amount inflation | Financial lifecycle segmentation, idempotency keys | No external banking reconciliation |
-| Network/service outage | Docker restart and DB persistence | No production HA or measured recovery |
-| Source-citation falsification | Raw snapshot, retrieval URL and row locator | No signed publisher attestation by default |
-
-## Known high-priority gaps
-
-- External audit anchoring, signed attestations and separated key custody.
-- Dedicated object storage with immutable retention, backup encryption, KMS and PITR.
-- Independent penetration testing and sustained performance characterization.
-- API rate limiting and reverse proxy WAF / TLS / IP filtering.
-- Source attribution licensing, data retention policy, DPIA and correction process.
-- External reconciliation of source-backed financial events; concurrency invariants
-  are now enforced with transactional locks and database checks, and exercised in CI.
-- Continuous vulnerability scanning, SBOM provenance and image signing.
-- Scrutinized OIDC provider claims mappings, MFA enforcement and incident response.
-
-**NO-GO for public multi-tenant or confidential-source use until controls are implemented and tested.**
-
-Request bodies are bounded to 64 KiB even without Content-Length; responses receive
-no-store and basic browser safety headers. These controls do not replace proxy TLS,
-connection/rate limits, phishing-resistant MFA or an independent security review.
-Database statements and lock waits have deadlines. JWKS fetches have a timeout;
-key rotation and outage behavior must also be checked against the actual IdP.
-
-The sequence-based audit chain retains its canonical hash input and is checked by
-both a database trigger and `python -m app.verify_integrity`. Evidence digests are
-also checked in SQL and by the verifier. A database administrator can rewrite an
-entire chain or remove its tail; independent externally held anchors remain absent.
-Attestation methods describe reviewer assertions; naming `DIGITAL_SIGNATURE` does
-not execute a signature validator or establish that a signature was checked.
+See [FR status](FR_STATUS.md), [operations](OPERATIONS.md) and [production gates](PRODUCTION_GATES.md).
+Production, confidential-source and hostile multi-tenant operation remain **NO-GO**.

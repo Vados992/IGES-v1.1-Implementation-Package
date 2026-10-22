@@ -180,6 +180,9 @@ def get_case(cid: UUID, user: dict = Depends(verified_identity)):
                     "(SELECT receipt->>'mime' FROM document_processing p WHERE p.document_id=documents.id ORDER BY created_at DESC,id DESC LIMIT 1) AS detected_mime") if table == 'documents' else '*'
             records[table] = rows(session, f'SELECT {cols} FROM {table} WHERE case_id=:id ORDER BY id LIMIT 501', id=str(cid))  # noqa: S608 -- fixed TABLES allowlist  # nosec B608
         records['publications'] = rows(session, 'SELECT id,version,revision,kind,supersedes_id,manifest_hash FROM publications WHERE case_id=:id ORDER BY version', id=str(cid))
+        records['members'] = rows(session, 'SELECT id,subject,role FROM case_members m WHERE case_id=:id '
+                                  'AND NOT EXISTS(SELECT 1 FROM case_member_revocations r WHERE r.member_id=m.id) ORDER BY subject,role',
+                                  id=str(cid)) if case['created_by'] == user['sub'] else []
         return jsonable_encoder({'id': cid, 'body': case['body'], 'case_revision': revision(session, cid),
                                  'records': records, 'record_limit': 500})
 

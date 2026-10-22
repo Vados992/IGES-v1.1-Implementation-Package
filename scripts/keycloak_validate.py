@@ -108,9 +108,15 @@ def main(client_id='iges-desktop', redirect='http://127.0.0.1:8765/callback'):
                 query = parse_qs(target.query)
                 if target.netloc != urlsplit(redirect).netloc or target.path != urlsplit(redirect).path or query.get("state") != [state] or "code" not in query:
                     raise RuntimeError("OTP login did not return the expected authorization code")
-                token = checked(browser.post(IDP + "/realms/iges/protocol/openid-connect/token", data={
+                origin = urlsplit(redirect).scheme + '://' + urlsplit(redirect).netloc
+                token_response = checked(browser.post(IDP + "/realms/iges/protocol/openid-connect/token", data={
                     "grant_type": "authorization_code", "client_id": client_id, "code": query["code"][0],
-                    "redirect_uri": redirect, "code_verifier": verifier})).json()["access_token"]
+                    "redirect_uri": redirect, "code_verifier": verifier}, headers={'Origin': origin} if client_id == 'iges-web' else {}))
+                if client_id == 'iges-web':
+                    if token_response.headers.get('access-control-allow-origin') != origin:
+                        raise RuntimeError('Browser token exchange CORS origin was not approved')
+                    result['browser_token_cors_verified'] = True
+                token = token_response.json()['access_token']
                 api = browser.get("https://localhost:8444/v1/admin/whoami", headers={"Authorization": "Bearer " + token})
                 if api.status_code != 200:
                     raise RuntimeError(f"Actual IdP token denied by API: {api.status_code} {api.json().get('detail')}")

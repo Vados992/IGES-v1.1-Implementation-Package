@@ -15,7 +15,7 @@ const actions = {
   publication: [['publish', 'Publication', 'publications']]
 };
 const tableTabs = {claims: ['claims','hypotheses'], documents:['sources','documents'], evidence:['evidence_items'],
-  graph:['entities','relationships','entity_resolutions'], review:['review_assignments','assessments'], legal:['publication_gates','responses'], publication:['publications']};
+  graph:['entities','relationships','entity_resolutions'], review:['review_assignments','assessments','members'], legal:['publication_gates','responses'], publication:['publications']};
 
 function element(tag, value, className) {
   const node = document.createElement(tag);
@@ -89,7 +89,7 @@ function renderRecords() {
   for (const table of tableTabs[activeTab]) {
     for (const record of current.records[table] || []) {
       count++; const body = record.body || {}, node = element('article', undefined, 'record');
-      const title = body.title || body.exact_text || body.statement || body.canonical_name || body.predicate || record.status || record.kind || t(activeTab);
+      const title = body.title || body.exact_text || body.statement || body.canonical_name || body.predicate || body.action || record.subject || record.status || record.kind || t(activeTab);
       node.append(element('h3', title));
       if (table === 'claims') {
         const decisions = (current.records.assessments || []).filter(a => a.claim_id === record.id && (a.revision === current.case_revision || a.status === 'WITHDRAWN_CORRECTED'));
@@ -196,11 +196,11 @@ function buildForm(action, holder, isNewCase = false) {
     if (prop.const !== undefined && prop.const !== true) continue;
     const required = (model === 'Withdrawal' && name === 'claim_id') || schema.required?.includes(name), wrapper = element('label'); wrapper.append(element('span', name === 'file' ? t('file') : fieldName(name)));
     let input, kind = prop.type;
-    const refs = {claim_id:'claims',document_id:'documents',evidence_id:'evidence_items',request_evidence_id:'evidence_items',source_id:'sources',reverses_id:'entity_resolutions',subject_id:'entities',object_id:'entities',supersedes_id:model === 'Claim' ? 'claims' : 'publications'};
+    const refs = {claim_id:'claims',document_id:'documents',evidence_id:'evidence_items',request_evidence_id:'evidence_items',source_id:'sources',reverses_id:'entity_resolutions',member_id:'members',subject_id:'entities',object_id:'entities',supersedes_id:model === 'Claim' ? 'claims' : 'publications'};
     if (refs[name] && current) {
       input = element('select'); const blank = element('option', t('choose')); blank.value = ''; input.append(blank);
       for (const record of current.records[refs[name]] || []) {
-        const body = record.body || {}, option = element('option', (body.title || body.exact_text || body.canonical_name || body.quote || record.sha256 || record.kind || record.id).slice(0,100)); option.value = record.id; input.append(option);
+        const body = record.body || {}, option = element('option', (body.title || body.exact_text || body.canonical_name || body.quote || (record.subject ? record.subject + ' · ' + record.role : '') || body.action || record.sha256 || record.kind || record.id).slice(0,100)); option.value = record.id; input.append(option);
       }
     } else if (prop.enum) {
       input = element('select'); const blank = element('option', t('choose')); blank.value = ''; input.append(blank);

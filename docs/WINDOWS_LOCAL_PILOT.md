@@ -14,6 +14,8 @@ under ignored `work/windows-pilot/private`; it contains passwords, keys and the
 new database cluster. Do not copy it into GitHub, an audit bundle or a shared folder.
 
 - API and OpenAPI: `https://localhost:8444/docs`.
+- Evidence workspace, after an approved v5 migration and IdP web-client setup:
+  `https://localhost:8444/workspace`.
 - Keycloak: `https://localhost:8443`.
 - PostgreSQL: `127.0.0.1:55432`, no LAN listener.
 - Keycloak uses a local cache; cluster discovery/listener ports are disabled.
@@ -61,6 +63,24 @@ run with retired bootstrap credentials; do not re-enable them just for this test
 `python -m scripts.windows_pilot verify` checks evidence/observation/audit integrity.
 No fixture observations are inserted into the working local pilot.
 This local cluster is separate from any previous databases on the computer.
+
+## Evidence-branch upgrade boundary
+
+This branch has not upgraded the existing installed pilot, changed its roles or
+completed personal MFA enrollment. Fresh setup uses all v5 migrations; existing
+databases require the explicit backup/migration process in [operations](OPERATIONS.md).
+Do not reset/recreate an existing database to obtain the new schema.
+
+Fresh realm definitions include the public `iges-web` client with S256 PKCE,
+exact localhost HTTPS origins and `/workspace` redirects on port 8444. Existing
+realms must be reviewed/configured by their administrator; rerunning setup does
+not silently add roles or replace accounts. The default operator's existing roles
+do not confer counsel/editor/panel authority. Case membership and global IdP role
+are both required. See [workspace](WORKSPACE.md) for the real-person workflow.
+
+The tested OCR/scanner deployment is the isolated Linux Compose intake worker.
+Native Windows OCR/scanning requires separately trusted installed tools and
+operator configuration; document that boundary before handling untrusted inputs.
 
 External security review is not completed. See
 `docs/INDEPENDENT_SECURITY_REVIEW.md` for scope, required evidence and acceptance.

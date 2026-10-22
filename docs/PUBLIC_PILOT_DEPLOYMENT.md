@@ -34,8 +34,12 @@ curl --fail https://your-owned-domain.example/readyz
 ```
 
 Caddy attempts automatic TLS certificate acquisition; it requires correct DNS
-and inbound TCP ports 80 and 443. It blocks `/v1/admin/*`, `/docs`,
-`/redoc` and `/openapi.json` at the edge. The database is not port-mapped;
+and inbound TCP ports 80 and 443. It blocks `/v1/admin/*`, `/v1/cases*`,
+`/v1/auth/*`, `/workspace`, `/publication`, `/v1/public/publications*`,
+`/v1/public/cases*`, `/docs`, `/redoc` and `/openapi.json` at the edge.
+Do not remove those restrictions to expose the new workspace or findings.
+No public deployment of this implementation branch has been performed.
+The database is not port-mapped;
 API's original port binding remains localhost-only.
 
 The public site is empty until official data are ingested on the trusted host:

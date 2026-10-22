@@ -23,6 +23,9 @@ No external auditor is contacted or commissioned by this repository.
 | Database | Actual restricted login, forced RLS, cross-project GUC manipulation, composite references, append-only grants, SQL injection and SQL-level review/return rules |
 | Financial events | Parallel replay/refund/reversal tests; duplicate conflict handling; currency and decimal precision; evidence does not establish actual banking execution |
 | Evidence | Exact upstream bytes/digests/locators, pagination/NULL semantics, bounded requests, SSRF/redirect rejection and revision retention |
+| Workspace | Current IdP roles plus revocable case memberships; stale If-Match; payload-sensitive idempotency; assigned independent review; terminal withdrawal; current-revision legal/privacy/reply/panel gates |
+| Intake | Actual ClamAV fail-closed behavior, signature updates, parser child/container restrictions, archives/polyglots/embedded content, OCR manual checks, private original downloads |
+| Publication | Canonical manifest/CSV hashes, immutable corrections, exact public snapshot privacy/copyright review, original/text/actor exclusion and private routes blocked at public gateway |
 | Audit | Canonical payload reconstruction, concurrency, tampering and truncation limitations; verify developer evidence against the exact reviewed commit |
 | Windows | ACLs on keys/passwords/data, process ownership on stop/restart, loopback bindings including Java cache/discovery ports, TLS chain validation and certificate expiry |
 | Dependencies | Publisher download receipts, application dependency list, package/container scans, secrets scan and excluded areas |

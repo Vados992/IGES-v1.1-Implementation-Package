@@ -176,12 +176,15 @@ def test_document_claim_review_publication_correction(monkeypatch):
             rev = amended['case_revision']
             assert client.get(base).json()['body']['title'] == 'TEST FIXTURE: amended scope'
             member = post(base + '/members', {'subject': 'TEST_READER', 'role': 'reader'}, rev)
+            assert any(m['id'] == member['id'] for m in client.get(base).json()['records']['members'])
             identity.update(sub='TEST_READER', roles=['reader'])
             assert client.get(base).status_code == 200
+            assert client.get(base).json()['records']['members'] == []
             identity.update(roles=[])
             assert client.get(base).status_code == 403
             identity.update(sub='TEST_ANALYST', roles=['analyst', 'editor'])
             post(base + '/member-revocations', {'member_id': member['id'], 'rationale': 'TEST FIXTURE: revoke this case access'}, rev)
+            assert all(m['id'] != member['id'] for m in client.get(base).json()['records']['members'])
             identity.update(sub='TEST_READER', roles=['reader'])
             assert client.get(base).status_code == 404
             identity.update(sub='OUTSIDER', roles=['editor'])
@@ -195,8 +198,19 @@ def test_document_claim_review_publication_correction(monkeypatch):
         app.dependency_overrides.clear()
 
 
-def test_workspace_contract_errors_and_language_resources():
+def test_workspace_contract_errors_and_language_resources(monkeypatch):
+    from dataclasses import replace
+    from app import main as api_module
     with TestClient(app) as client:
+        monkeypatch.setattr(api_module, 'settings', replace(api_module.settings, oidc_issuer='', oidc_jwks_url='', oidc_audience=''))
+        assert client.get('/v1/auth/config').status_code == 503
+        monkeypatch.setattr(api_module, 'settings', replace(api_module.settings, oidc_issuer='https://issuer.example/realm',
+                            oidc_jwks_url='https://issuer.example/jwks', oidc_audience='iges-api'))
+        monkeypatch.setenv('IGES_OIDC_WEB_CLIENT_ID', 'approved-web-client')
+        public_config = client.get('/v1/auth/config').json()
+        assert public_config['issuer'] == 'https://issuer.example/realm'
+        assert public_config['client_id'] == 'approved-web-client'
+        assert public_config['mfa_required'] is True
         response = client.get('/not-an-existing-route')
         assert response.status_code == 404
         assert response.headers['content-type'].startswith('application/problem+json')
