@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from decimal import Decimal
+import os
 from pathlib import Path
 from uuid import UUID
 
@@ -132,6 +133,14 @@ def whoami(user: dict = Depends(verified_identity)):
             "roles": user.get("roles", []), "amr": user.get("amr", []),
             "acr": user.get("acr"), "auth_time": user.get("auth_time"),
             "mfa_enforced": settings.oidc_require_mfa}
+
+
+@app.get('/v1/auth/config')
+def browser_auth_config():
+    if not all((settings.oidc_issuer, settings.oidc_jwks_url, settings.oidc_audience)) or not https_endpoint(settings.oidc_issuer):
+        raise HTTPException(503, 'OIDC_NOT_CONFIGURED')
+    return {'issuer': settings.oidc_issuer, 'client_id': os.getenv('IGES_OIDC_WEB_CLIENT_ID', 'iges-web'),
+            'audience': settings.oidc_audience, 'flow': 'authorization_code_pkce', 'mfa_required': settings.oidc_require_mfa}
 
 
 @app.get("/readyz")

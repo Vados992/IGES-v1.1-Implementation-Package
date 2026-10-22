@@ -48,7 +48,7 @@ def checked(response):
     return response
 
 
-def main():
+def main(client_id='iges-desktop', redirect='http://127.0.0.1:8765/callback'):
     config = json.loads((STATE / "settings.json").read_text())
     context = ssl.create_default_context(cafile=str(STATE / "ca.pem"))
     with httpx.Client(verify=context, timeout=20) as admin:
@@ -79,16 +79,15 @@ def main():
                  "credentialData": json.dumps({"subType": "totp", "digits": 6, "counter": 0,
                                                 "period": 30, "algorithm": "HmacSHA1"})}]}))
         user_url = created.headers["location"]
-        result = {"checked_at": datetime.now(timezone.utc).isoformat(), "issuer": IDP + "/realms/iges"}
+        result = {"checked_at": datetime.now(timezone.utc).isoformat(), "issuer": IDP + "/realms/iges", 'client_id': client_id}
         try:
             role = checked(admin.get(base + "/roles/ingestor")).json()
             checked(admin.post(user_url + "/role-mappings/realm", json=[role]))
             verifier = secrets.token_urlsafe(64)
             challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).decode().rstrip("=")
             state = secrets.token_urlsafe(32)
-            redirect = "http://127.0.0.1:8765/callback"
             auth_url = IDP + "/realms/iges/protocol/openid-connect/auth?" + urlencode({
-                "client_id": "iges-desktop", "response_type": "code", "scope": "openid",
+                "client_id": client_id, "response_type": "code", "scope": "openid",
                 "redirect_uri": redirect, "state": state, "code_challenge": challenge,
                 "code_challenge_method": "S256"})
             with httpx.Client(verify=context, timeout=20, follow_redirects=False) as browser:
@@ -107,10 +106,10 @@ def main():
                 response = checked(browser.post(form.action, data={**form.fields, "otp": totp(secret)}))
                 target = urlsplit(response.headers.get("location", ""))
                 query = parse_qs(target.query)
-                if target.netloc != "127.0.0.1:8765" or query.get("state") != [state] or "code" not in query:
+                if target.netloc != urlsplit(redirect).netloc or target.path != urlsplit(redirect).path or query.get("state") != [state] or "code" not in query:
                     raise RuntimeError("OTP login did not return the expected authorization code")
                 token = checked(browser.post(IDP + "/realms/iges/protocol/openid-connect/token", data={
-                    "grant_type": "authorization_code", "client_id": "iges-desktop", "code": query["code"][0],
+                    "grant_type": "authorization_code", "client_id": client_id, "code": query["code"][0],
                     "redirect_uri": redirect, "code_verifier": verifier})).json()["access_token"]
                 api = browser.get("https://localhost:8444/v1/admin/whoami", headers={"Authorization": "Bearer " + token})
                 if api.status_code != 200:

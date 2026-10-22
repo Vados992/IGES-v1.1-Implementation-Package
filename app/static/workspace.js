@@ -144,6 +144,47 @@ async function write(suffix, body, key, isNewCase = false, binary = false) {
   headers['Content-Type'] = binary ? 'application/octet-stream' : 'application/json';
   return json(isNewCase ? '/v1/cases' : '/v1/cases/' + current.id + suffix, {method:'POST', headers, body: binary ? body : JSON.stringify(body)});
 }
+function base64url(bytes) { return btoa(String.fromCharCode(...bytes)).replaceAll('+','-').replaceAll('/','_').replace(/=+$/,''); }
+async function oidcMetadata() {
+  const response = await fetch('/v1/auth/config', {credentials:'omit'});
+  if (!response.ok) throw new Error(t('OIDC_NOT_CONFIGURED'));
+  const config = await response.json(), issuer = new URL(config.issuer);
+  if (issuer.protocol !== 'https:') throw new Error(t('OIDC_NOT_CONFIGURED'));
+  const discovery = await fetch(config.issuer.replace(/\/$/,'') + '/.well-known/openid-configuration', {credentials:'omit'});
+  if (!discovery.ok) throw new Error(t('OIDC_NOT_CONFIGURED'));
+  const metadata = await discovery.json();
+  if (metadata.issuer !== config.issuer || ['authorization_endpoint','token_endpoint'].some(key => new URL(metadata[key]).origin !== issuer.origin)) throw new Error(t('OIDC_NOT_CONFIGURED'));
+  return {config, metadata};
+}
+async function connectIdentity(accessToken) {
+  token = accessToken;
+  const user = await json('/v1/admin/whoami'); $('identity').textContent = user.subject + ' · ' + user.roles.join(', ');
+  $('connection').hidden = true; $('session').hidden = false; message(''); await loadCases();
+}
+async function beginSSO() {
+  const {config, metadata} = await oidcMetadata();
+  const verifier = base64url(crypto.getRandomValues(new Uint8Array(48))), state = base64url(crypto.getRandomValues(new Uint8Array(32)));
+  const challenge = base64url(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier))));
+  const redirectUri = location.origin + '/workspace';
+  sessionStorage.setItem('iges-pkce', JSON.stringify({verifier,state,redirectUri,createdAt:Date.now()}));
+  const url = new URL(metadata.authorization_endpoint);
+  url.search = new URLSearchParams({client_id:config.client_id,response_type:'code',scope:'openid',redirect_uri:redirectUri,
+    state,code_challenge:challenge,code_challenge_method:'S256',max_age:'0',prompt:'login'}).toString();
+  location.assign(url.href);
+}
+async function completeSSO() {
+  const query = new URLSearchParams(location.search);
+  if (!query.has('code') && !query.has('error')) return;
+  history.replaceState(null, '', location.pathname);
+  const saved = JSON.parse(sessionStorage.getItem('iges-pkce') || 'null'); sessionStorage.removeItem('iges-pkce');
+  if (!saved || Date.now()-saved.createdAt > 600000 || query.get('state') !== saved.state || !query.get('code')) throw new Error(t('noSession'));
+  const {config, metadata} = await oidcMetadata();
+  const response = await fetch(metadata.token_endpoint, {method:'POST', credentials:'omit',
+    headers:{'Content-Type':'application/x-www-form-urlencoded'}, body:new URLSearchParams({client_id:config.client_id,
+      grant_type:'authorization_code',code:query.get('code'),redirect_uri:saved.redirectUri,code_verifier:saved.verifier})});
+  if (!response.ok) throw new Error(t('noSession'));
+  const result = await response.json(); await connectIdentity(result.access_token);
+}
 function buildForm(action, holder, isNewCase = false) {
   const [label, model, endpoint] = action; holder.append(element('h2', t(label)));
   const form = element('form'), controls = [];
@@ -210,12 +251,12 @@ async function start() {
   strings = await (await fetch('/assets/workspace-i18n.json')).json(); specification = await (await fetch('/openapi.json')).json(); translate();
   $('language').addEventListener('change', event => { locale = event.target.value; translate(); });
   $('disconnect').addEventListener('click', disconnect);
+  $('oidcLogin').addEventListener('click', () => beginSSO().catch(showError));
   $('newCase').addEventListener('click', () => { $('editor').replaceChildren(); buildForm(['newCase','Case','cases'], $('editor'), true); });
   $('connectForm').addEventListener('submit', async event => {
     event.preventDefault(); token = $('accessToken').value.trim(); $('accessToken').value = '';
-    try { const user = await json('/v1/admin/whoami'); $('identity').textContent = user.subject + ' · ' + user.roles.join(', ');
-      $('connection').hidden = true; $('session').hidden = false; message(''); await loadCases();
-    } catch (error) { disconnect(); showError(error); }
+    try { await connectIdentity(token); } catch (error) { disconnect(); showError(error); }
   });
+  await completeSSO();
 }
 start().catch(showError);

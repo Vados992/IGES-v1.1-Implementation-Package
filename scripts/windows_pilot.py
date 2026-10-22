@@ -66,7 +66,7 @@ def certificate():
                                       + ca.public_bytes(serialization.Encoding.PEM))
 
 
-def realm(config):
+def _realm_profile(config):
     def mapper(name, provider, values):
         return {"name": name, "protocol": "openid-connect", "protocolMapper": provider,
                 "config": {"access.token.claim": "true", "id.token.claim": "false", **values}}
@@ -105,6 +105,15 @@ def realm(config):
             "requiredActions": ["UPDATE_PASSWORD", "CONFIGURE_TOTP"],
             "realmRoles": ["analyst", "reviewer", "ingestor"],
             "credentials": [{"type": "password", "value": config["operator_password"], "temporary": True}]}]}
+
+
+def realm(config):
+    profile = _realm_profile(config)
+    desktop = profile['clients'][0]
+    profile['clients'].append({**desktop, 'clientId': 'iges-web', 'name': 'IGES analyst workspace',
+        'redirectUris': ['https://localhost:8444/workspace', 'https://127.0.0.1:8444/workspace'],
+        'webOrigins': ['https://localhost:8444', 'https://127.0.0.1:8444']})
+    return profile
 
 
 def setup():

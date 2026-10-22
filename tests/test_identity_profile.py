@@ -15,6 +15,12 @@ def test_windows_identity_requires_real_factors_and_pkce():
     assert client["directAccessGrantsEnabled"] is False
     assert client["serviceAccountsEnabled"] is False
     assert profile["users"][0]["requiredActions"] == ["UPDATE_PASSWORD", "CONFIGURE_TOTP"]
+    web = next(client for client in profile['clients'] if client['clientId'] == 'iges-web')
+    assert web['attributes']['pkce.code.challenge.method'] == 'S256'
+    assert web['directAccessGrantsEnabled'] is False
+    assert web['serviceAccountsEnabled'] is False
+    assert 'https://localhost:8444/workspace' in web['redirectUris']
+    assert 'https://localhost:8444' in web['webOrigins']
 
 
 @pytest.mark.parametrize("value", ["0", "-1", "59", "3601", "not-a-number"])

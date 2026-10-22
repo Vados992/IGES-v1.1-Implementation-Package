@@ -5,7 +5,7 @@
     "controlled": "Controlled public-source pilot",
     "boundary": "Originals stay private. A quotation is source evidence; a finding requires independent human review. Publication requires legal/privacy approval for the current revision.",
     "signin": "Connect your research session",
-    "tokenHelp": "Use the short-lived access token from the OIDC/MFA login helper. It is kept only in this page's memory.",
+    "tokenHelp": "Advanced: connect an existing short-lived OIDC access token. It stays only in page memory.",
     "accessToken": "Access token",
     "connect": "Connect",
     "disconnect": "Disconnect",
@@ -146,7 +146,9 @@
     "resolveEntity": "Merge / undo entity alias",
     "withdraw": "Withdraw own claim",
     "amendCase": "Revise case scope",
-    "revokeMember": "Revoke case membership"
+    "revokeMember": "Revoke case membership",
+    "sso": "Sign in with SSO and MFA",
+    "OIDC_NOT_CONFIGURED": "The operator must configure OIDC and the iges-web client before browser sign-in."
   },
   "ru": {
     "workspace": "Кабинет аналитика",
@@ -154,7 +156,7 @@
     "controlled": "Контролируемый пилот на открытых источниках",
     "boundary": "Оригиналы закрыты. Цитата — свидетельство источника; вывод требует независимой рецензии человека. Публикация требует правовой и privacy-проверки текущей редакции.",
     "signin": "Подключить рабочую сессию",
-    "tokenHelp": "Используйте краткосрочный токен из помощника входа OIDC/MFA. Он хранится только в памяти этой страницы.",
+    "tokenHelp": "Дополнительно: подключить имеющийся краткосрочный токен OIDC. Он остаётся только в памяти страницы.",
     "accessToken": "Токен доступа",
     "connect": "Подключить",
     "disconnect": "Отключить",
@@ -295,6 +297,8 @@
     "resolveEntity": "Объединить / отменить объединение сущностей",
     "withdraw": "Отозвать своё утверждение",
     "amendCase": "Изменить границы дела",
-    "revokeMember": "Отозвать доступ к делу"
+    "revokeMember": "Отозвать доступ к делу",
+    "sso": "Войти через SSO с MFA",
+    "OIDC_NOT_CONFIGURED": "Для входа оператор должен настроить OIDC и клиент iges-web."
   }
 }
