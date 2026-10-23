@@ -28,6 +28,11 @@ dataset profiles across FDIC, ECB, BoE, Treasury, CFTC, Eurostat, NYC ACRIS, Lan
 Registry, GLEIF and Alpaca. All new records are authenticated research data with
 raw/request hashes, private originals and explicit coverage/credential boundaries.
 
+The [Ukrainian public-office collection](docs/UKRAINE_PUBLIC_RECORDS.md) adds
+official Rada VII–IX membership/posts and CEC local election records, minimized
+name search and an auditable availability ledger. It is a bounded collection;
+NAZK declarations and complete coverage of all politicians/years are not claimed.
+
 Exact acceptance evidence and remaining limits: [FR-01–FR-16 status](docs/FR_STATUS.md).
 Architecture choices: [MVP ADR](docs/ADR_EVIDENCE_MVP.md).
 Operator/reviewer workflow: [workspace guide](docs/WORKSPACE.md).
@@ -58,9 +63,9 @@ the Compose intake profile provides the tested processing environment.
 
 ## Upgrade existing data
 
-Fresh bootstrap applies schema **v6** in one transaction. Normal application
+Fresh bootstrap applies schema **v7** in one transaction. Normal application
 startup does not migrate. After a verified backup, an administrator can inspect
-and explicitly apply the transactional v2/v3/v4/v5 → v6 migrations:
+and explicitly apply the transactional v2 through v6 → v7 migrations:
 
 ```sh
 # Set IGES_MIGRATION_DATABASE_URL privately with administration credentials.

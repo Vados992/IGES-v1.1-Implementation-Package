@@ -26,7 +26,7 @@ PROTECTED_TABLES = (
     'document_processing', 'evidence_items', 'entities', 'relationships', 'review_assignments',
     'entity_resolutions', 'case_revisions', 'case_member_revocations',
     'assessments', 'publication_gates', 'responses', 'publications', 'write_receipts', 'integrity_incidents', 'record_seals',
-    'source_batches', 'source_records',
+    'source_batches', 'source_records', 'source_collection_attempts',
 )
 
 

@@ -1,5 +1,12 @@
 # Specification v1.0 MVP: FR-01–FR-16 acceptance ledger
 
+2026-10-23 source extension: schema v7 adds real Ukrainian Rada/CEC records,
+minimized private name search and an audited NAZK availability ledger. Exact
+counts, date boundaries and missing financial/executive/local history are in
+[Ukraine collection status](UKRAINE_PUBLIC_RECORDS.md). These source imports do
+not upgrade any FR to independent human/production acceptance; FR-09, FR-12 and
+FR-14 remain partial as recorded below.
+
 Scope: the supplied 27-page `IGES_Technical_Specification_v1_0_MVP_EN.pdf`,
 sections 6 and 19. This ledger describes the implementation branch, not the
 unchanged installed pilot or a production acceptance certificate.

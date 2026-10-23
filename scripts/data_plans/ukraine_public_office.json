@@ -1,0 +1,9 @@
+[
+  {"dataset":"ua_rada_roster","params":{"term":"7"}},
+  {"dataset":"ua_rada_roster","params":{"term":"8"}},
+  {"dataset":"ua_rada_roster","params":{"term":"9"}},
+  {"dataset":"ua_rada_posts","params":{"term":"7"}},
+  {"dataset":"ua_rada_posts","params":{"term":"8"}},
+  {"dataset":"ua_rada_posts","params":{"term":"9"}},
+  {"dataset":"ua_cec_elected_2020","params":{}}
+]

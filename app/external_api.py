@@ -44,6 +44,8 @@ def catalog(user: dict = Depends(READ)):
     for key, spec in DATASETS.items():
         item = {"dataset": key, **asdict(spec)}
         item["max_page_size"] = 200 if spec.provider in {"CFTC", "GLEIF"} else 1000
+        item["whole_archive"] = spec.provider.startswith("UA_")
+        item["case_original_admission"] = not spec.provider.startswith("UA_")
         item["configured"] = spec.provider != "ALPACA" or bool(
             os.getenv("IGES_ALPACA_DATA_KEY") and os.getenv("IGES_ALPACA_DATA_SECRET")
         )
@@ -194,6 +196,8 @@ def original(
             "SELECT e.*,b.metadata FROM evidence e JOIN source_batches b ON b.id=e.id WHERE e.id=:id",
             id=str(bid),
         )
+        if row["provider"].startswith("UA_") and "counsel" not in user["roles"]:
+            raise HTTPException(403, "UKRAINE_ORIGINAL_COUNSEL_REVIEW_REQUIRED")
         snap = parse_external(
             bytes(row["raw_bytes"]), row["source_request"], row["source_url"], row["metadata"]["transport"]
         )
@@ -224,6 +228,8 @@ def admit(cid: UUID, body: Admission, writer: Writer = Depends()):
         if snap.sha256 != row["content_sha256"] or snap.request_sha256 != row["request_sha256"]:
             raise HTTPException(409, "SOURCE_HASH_MISMATCH")
         spec = DATASETS[row["dataset"]]
+        if spec.provider.startswith("UA_"):
+            raise HTTPException(409, "UKRAINE_ORIGINAL_REQUIRES_MINIMIZED_CASE_DOCUMENT")
         source = {
             "title": spec.title,
             "publisher": spec.provider,

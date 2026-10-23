@@ -21,7 +21,7 @@ pytestmark = [
 ]
 
 
-@pytest.mark.parametrize("starting_version", [2, 5])
+@pytest.mark.parametrize("starting_version", [2, 5, 6])
 def test_v2_upgrade_preserves_source_and_audit(starting_version):
     name = "iges_upgrade_" + uuid4().hex
     url = make_url(os.environ["IGES_TEST_ADMIN_URL"])
@@ -63,12 +63,15 @@ def test_v2_upgrade_preserves_source_and_audit(starting_version):
                 )
                 append_audit(session, "MIGRATION_TEST", "SOURCE_RECEIVED", eid)
             with migrated.begin() as connection:
-                if starting_version == 5:
-                    for filename in [
+                if starting_version >= 5:
+                    filenames = [
                         "003_award_provenance.sql",
                         "004_evidence_workflow.sql",
                         "005_workspace_revisions.sql",
-                    ]:
+                    ]
+                    if starting_version == 6:
+                        filenames.append("006_external_sources.sql")
+                    for filename in filenames:
                         connection.exec_driver_sql(
                             (Path(__file__).resolve().parents[1] / "db/migrations" / filename).read_text(),
                             execution_options={"no_parameters": True},
@@ -84,7 +87,7 @@ def test_v2_upgrade_preserves_source_and_audit(starting_version):
                     == audit_before
                 )
                 assert after["request_sha256"] == hashlib.sha256(("GET " + source).encode()).hexdigest()
-                assert connection.execute(text("SELECT version FROM schema_version")).scalar_one() == 6
+                assert connection.execute(text("SELECT version FROM schema_version")).scalar_one() == 7
                 protected = connection.execute(
                     text(
                         "SELECT relrowsecurity AND relforcerowsecurity FROM pg_class WHERE relname='public_awards'"

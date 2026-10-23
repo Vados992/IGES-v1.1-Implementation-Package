@@ -26,7 +26,7 @@ async def main():
     receipts = []
     failures = []
     for dataset, spec in DATASETS.items():
-        if spec.provider == "ALPACA":
+        if spec.provider == "ALPACA" or spec.provider.startswith("UA_"):
             continue  # Market credentials are never silently substituted or requested from CI secrets.
         try:
             snapshot = await fetch_external(dataset, {}, limit=5)

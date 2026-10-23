@@ -80,20 +80,24 @@ def store_external(session, snapshot, actor):
             "sha": sha,
         },
     )
-    for record in snapshot.records:
+    # Bounded executemany chunks keep a national election archive atomic and avoid one round-trip per row.
+    for offset in range(0, len(snapshot.records), 500):
         session.execute(
             text(
                 "INSERT INTO source_records(project_id,evidence_id,source_key,body,source_locator,record_sha256) "
                 "VALUES(:pid,:eid,:key,CAST(:body AS jsonb),:locator,:sha)"
             ),
-            {
-                "pid": pid,
-                "eid": eid,
-                "key": record["key"],
-                "body": canonical(record["body"]),
-                "locator": record["locator"],
-                "sha": row_hash(record),
-            },
+            [
+                {
+                    "pid": pid,
+                    "eid": eid,
+                    "key": record["key"],
+                    "body": canonical(record["body"]),
+                    "locator": record["locator"],
+                    "sha": row_hash(record),
+                }
+                for record in snapshot.records[offset : offset + 500]
+            ],
         )
     append_audit(session, actor, "EXTERNAL_SOURCE_BATCH_RECEIVED", f"{eid}:{sha}")
     return {
@@ -166,4 +170,36 @@ def verify_external(session, evidence, audit):
     batches = {str(i) for i in session.execute(text("SELECT id FROM source_batches")).scalars()}
     if batches != expected_batches:
         raise ValueError("SOURCE_BATCH_WITHOUT_ORIGINAL")
-    return {"external_source_batches_checked": len(batches), "external_source_records_checked": checked}
+    attempts = session.execute(text("SELECT * FROM source_collection_attempts")).mappings().all()
+    for attempt in attempts:
+        if (
+            row_hash(attempt["body"]) != attempt["body_sha256"]
+            or attempt["body"].get("dataset") != attempt["dataset"]
+            or ("SOURCE_COLLECTION_ATTEMPT", f"{attempt['id']}:{attempt['body_sha256']}") not in events
+        ):
+            raise ValueError("SOURCE_COLLECTION_ATTEMPT_MISMATCH")
+    return {
+        "external_source_batches_checked": len(batches),
+        "external_source_records_checked": checked,
+        "source_collection_attempts_checked": len(attempts),
+    }
+
+
+def store_collection_attempt(session, body, actor):
+    """No response body or credentials: source availability is itself attributed, hashed and audited."""
+    aid, sha = str(uuid4()), row_hash(body)
+    session.execute(
+        text(
+            "INSERT INTO source_collection_attempts(id,project_id,dataset,body,body_sha256) "
+            "VALUES(:id,:pid,:dataset,CAST(:body AS jsonb),:sha)"
+        ),
+        {
+            "id": aid,
+            "pid": str(settings.project_id),
+            "dataset": body["dataset"],
+            "body": canonical(body),
+            "sha": sha,
+        },
+    )
+    append_audit(session, actor, "SOURCE_COLLECTION_ATTEMPT", f"{aid}:{sha}")
+    return aid
