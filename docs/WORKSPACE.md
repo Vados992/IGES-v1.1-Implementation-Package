@@ -4,6 +4,13 @@ The controlled workspace is `/workspace`; public versions use `/publication#ID`.
 RU/EN is selected in the header. Lists and forms are backed by the actual API,
 not bundled research cases. Start with an empty, isolated evaluation database.
 
+**Financial and property datasets** opens the authenticated source catalogue.
+Current ingestors can fetch a bounded real page; research readers can inspect
+stored batches. Select a case, then admit a source original: it enters PENDING
+and follows actual scanning/extraction before evidence creation. See the
+[source guide](FINANCE_PROPERTY_SOURCES.md) for units, access, paging and licence
+boundaries. The record source remains separate from a human finding.
+
 ## Identity and case access
 
 Use **Sign in with SSO** with a real approved OIDC provider. Missing issuer,

@@ -26,6 +26,7 @@ from app.usaspending import fetch_awards, MAX_FISCAL_YEAR
 from app.worldbank import ALLOWED_INDICATORS, fetch_snapshot
 from app.workflow import router as workflow_router
 from app.problems import install as install_problems
+from app.external_api import router as external_router
 
 app = FastAPI(
     title="IGES v1.1 Controlled Pilot",
@@ -35,6 +36,7 @@ app = FastAPI(
 app.add_middleware(BodyLimitMiddleware, max_bytes=65536)
 app.add_middleware(RateLimitMiddleware)
 app.include_router(workflow_router)
+app.include_router(external_router)
 
 STATIC_DIR = Path(__file__).parent / "static"
 app.mount("/assets", StaticFiles(directory=STATIC_DIR), name="assets")

@@ -1,5 +1,9 @@
 # Data acquisition and evidentiary limitations
 
+The executable [finance/property catalogue](FINANCE_PROPERTY_SOURCES.md) now adds
+20 dataset profiles across ten public/regulatory/market providers. Existing
+World Bank and USAspending records retain their original semantics and verifier.
+
 ## Live source: World Bank Indicators API v2
 
 Documentation: https://datahelpdesk.worldbank.org/knowledgebase/articles/889392-about-the-indicators-api-documentation

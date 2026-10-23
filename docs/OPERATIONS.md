@@ -1,4 +1,4 @@
-# Operations and recovery — evidence MVP, schema v5
+# Operations and recovery — evidence MVP, schema v6
 
 ## Supported deployment
 
@@ -21,7 +21,7 @@ The schema initialization shell executes only for **new PostgreSQL data volumes*
 Do not delete existing volumes to apply updates. Verify a backup first, inspect
 `python -m app.migrate` with a privately supplied `IGES_MIGRATION_DATABASE_URL`,
 then explicitly run `python -m app.migrate --apply` using administration credentials.
-Only v2/v3/v4 to v5 is supported; unsupported old schemas stop for separate review.
+Only v2/v3/v4/v5 to v6 is supported; unsupported old schemas stop for separate review.
 Upgrades are transactional, advisory-locked and repeat-safe. Normal app startup
 never migrates. Do not perform a destructive downgrade; restore a verified backup
 to a new recovery database if an approved recovery is necessary.
@@ -30,7 +30,7 @@ The bootstrap uses a single transaction and rejects example, short or identical
 passwords. If first initialization fails, PostgreSQL may retain its initialized
 data directory without the schema. Keep that volume for diagnosis and select a
 **new Compose project/volume**, or repair it under administrator control.
-`/readyz` verifies schema v5, project binding, restricted runtime role, forced RLS
+`/readyz` verifies schema v6, project binding, restricted runtime role, forced RLS
 and protected-table append-only grants. It returns 503 for old/missing schemas.
 
 OIDC access tokens require the configured `iss`, `aud`, unexpired `exp`, nonempty
@@ -110,3 +110,10 @@ A dedicated centralized observability stack and distributed rate limit are not
 provisioned. The bounded CI read-load probe is not a full capacity/SLO acceptance.
 
 See [FR status](FR_STATUS.md) and [production gates](PRODUCTION_GATES.md).
+
+The [finance/property source catalogue](FINANCE_PROPERTY_SOURCES.md) documents
+bounded ingestion, corpus receipts, paging failures, private research access and
+market credentials. Source imports use project-level ingestor permission; admission
+to a case additionally requires case membership. Preserve partial source pages;
+resume with reviewed query/page parameters instead of deleting or replacing them.
+HTTP-client INFO URL logging is suppressed; use request hashes and trace IDs.

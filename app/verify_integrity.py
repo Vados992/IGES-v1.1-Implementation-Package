@@ -14,6 +14,8 @@ from app.database import tenant_session, check_database
 from app.worldbank import parse_snapshot
 from app.usaspending import parse_awards, canonical_request
 from app.record_integrity import verify_workspace
+from app.external_catalog import PROVIDERS
+from app.external_persistence import verify_external
 
 
 def verify_audit_rows(rows) -> int:
@@ -36,11 +38,13 @@ def verify_integrity(export_dir: Path | None = None) -> dict:
         check_database(session)
         # A single coherent snapshot while other writers continue.
         evidence = session.execute(text(
-            "SELECT id,provider,content_sha256,request_sha256,source_request,raw_bytes,source_url,retrieved_at FROM evidence"
+            "SELECT id,provider,content_sha256,request_sha256,source_request,raw_bytes,source_url,retrieved_at,media_type FROM evidence"
         )).mappings().all()
         for row in evidence:
             if hashlib.sha256(bytes(row["raw_bytes"])).hexdigest() != row["content_sha256"]:
                 raise ValueError(f"evidence digest mismatch: {row['id']}")
+            if row['provider'] in PROVIDERS:
+                continue
             if row["provider"] == "USA_SPENDING":
                 if hashlib.sha256(canonical_request(row["source_request"])).hexdigest() != row["request_sha256"]:
                     raise ValueError(f"request digest mismatch: {row['id']}")
@@ -74,14 +78,17 @@ def verify_integrity(export_dir: Path | None = None) -> dict:
         rows = session.execute(text("SELECT * FROM audit_events ORDER BY sequence")).mappings().all()
         count = verify_audit_rows(rows)
         workspace = verify_workspace(session, rows)
+        external = verify_external(session, evidence, rows)
     if export_dir is not None:
         export_dir.mkdir(parents=True, exist_ok=True)
         for row in evidence:
+            if row['provider'] in PROVIDERS:
+                continue  # Property/licensed/identity originals never enter the public-source export.
             (export_dir / f"{row['id']}.response.json").write_bytes(bytes(row["raw_bytes"]))
             receipt = {key: row[key] for key in ["provider", "content_sha256", "request_sha256", "source_request", "source_url"]}
             receipt.update(evidence_id=str(row["id"]), retrieved_at=row["retrieved_at"].isoformat())
             (export_dir / f"{row['id']}.receipt.json").write_text(json.dumps(receipt, indent=2), encoding="utf-8")
-    return {**workspace, "evidence_hashes_checked": len(evidence), "audit_entries_checked": count,
+    return {**workspace, **external, "evidence_hashes_checked": len(evidence), "audit_entries_checked": count,
             "status": "INTERNALLY_CONSISTENT", "externally_anchored": False}
 
 

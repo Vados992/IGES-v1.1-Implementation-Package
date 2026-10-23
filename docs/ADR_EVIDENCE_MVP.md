@@ -78,3 +78,9 @@ old versions remain marked and accessible. An approved legal erasure/retention
 procedure and external cache handling are operational gaps, not an unaudited delete.
 
 See the exact [FR ledger](FR_STATUS.md) and [NO-GO gates](PRODUCTION_GATES.md).
+
+Source expansion adds migration 006/schema v6 and append-only project-scoped
+source batches/records; original histories and v5 migrations are unchanged.
+[Finance/property decisions and access boundaries](FINANCE_PROPERTY_SOURCES.md)
+include the NYC row-key adapter version, source paging/vintage checks, human
+admission to a case and the distinct Alpaca MCP/HTTP acquisition paths.

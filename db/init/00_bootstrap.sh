@@ -18,4 +18,5 @@ psql --username "${POSTGRES_USER}" --dbname "${POSTGRES_DB}" \
   --file /docker-entrypoint-initdb.d/01_schema.template \
   --file /iges-migrations/003_award_provenance.sql \
   --file /iges-migrations/004_evidence_workflow.sql \
-  --file /iges-migrations/005_workspace_revisions.sql
+  --file /iges-migrations/005_workspace_revisions.sql \
+  --file /iges-migrations/006_external_sources.sql

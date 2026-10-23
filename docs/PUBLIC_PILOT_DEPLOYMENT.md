@@ -35,7 +35,7 @@ curl --fail https://your-owned-domain.example/readyz
 
 Caddy attempts automatic TLS certificate acquisition; it requires correct DNS
 and inbound TCP ports 80 and 443. It blocks `/v1/admin/*`, `/v1/cases*`,
-`/v1/auth/*`, `/workspace`, `/publication`, `/v1/public/publications*`,
+`/v1/auth/*`, `/v1/sources*`, `/workspace`, `/publication`, `/v1/public/publications*`,
 `/v1/public/cases*`, `/docs`, `/redoc` and `/openapi.json` at the edge.
 Do not remove those restrictions to expose the new workspace or findings.
 No public deployment of this implementation branch has been performed.

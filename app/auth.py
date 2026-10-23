@@ -90,10 +90,10 @@ def verified_identity(
         raise HTTPException(status_code=401, detail="INVALID_TOKEN") from None
 
 
-def require_role(role: str):
+def require_role(role: str, *additional: str):
     def _required(identity: dict = Depends(verified_identity)) -> dict:
         roles = identity.get("roles", [])
-        if not isinstance(roles, list) or role not in roles:
+        if not isinstance(roles, list) or not any(allowed in roles for allowed in (role, *additional)):
             raise HTTPException(status_code=403, detail="ROLE_DENIED")
         return identity
 

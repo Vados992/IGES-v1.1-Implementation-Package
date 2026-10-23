@@ -34,7 +34,7 @@ def main():
         if request.headers.get('authorization') != 'Bearer EXPLICIT-LOCAL-UI-TEST-TOKEN':
             raise HTTPException(401, 'TEST_IDENTITY_REQUIRED')
         return {'sub': 'EXPLICIT_UI_TEST_ACTOR', 'project_id': environment['IGES_PUBLIC_PROJECT_ID'],
-                'roles': ['analyst', 'editor']}
+                'roles': ['analyst', 'editor', 'ingestor']}
     app.dependency_overrides[verified_identity] = test_identity
     uvicorn.run(app, host='127.0.0.1', port=8097, access_log=False)
 

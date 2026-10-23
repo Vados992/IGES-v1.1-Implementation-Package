@@ -20,6 +20,7 @@ def problem(status, code, request_id=None, headers=None):
 
 def install(app):
     logging.basicConfig(level=logging.INFO, format='%(message)s')
+    logging.getLogger('httpx').setLevel(logging.WARNING)
     original_openapi = app.openapi
     def openapi():
         schema = original_openapi()

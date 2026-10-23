@@ -1,5 +1,5 @@
 'use strict';
-let token = '', locale = 'en', strings = {}, specification = {}, current = null, activeTab = 'claims';
+let token = '', locale = 'en', strings = {}, specification = {}, current = null, activeTab = 'claims', currentRoles = [];
 const $ = id => document.getElementById(id);
 const t = key => strings[locale]?.[key] || strings.en?.[key] || key;
 const fieldName = key => strings[locale]?.fields[key] || strings.en?.fields[key] || key.replaceAll('_', ' ');
@@ -42,10 +42,11 @@ async function json(path, options) { return (await api(path, options)).json(); }
 function translate() {
   document.documentElement.lang = locale;
   document.querySelectorAll('[data-t]').forEach(node => node.textContent = t(node.dataset.t));
-  if (token) { loadCases().catch(showError); if (current) renderCase(); }
+  if (token) { loadCases().catch(showError); if (current) renderCase(); if (!$('sourcePanel').hidden) showSourcePanel().catch(showError); }
 }
 function disconnect() {
   token = ''; current = null; $('accessToken').value = ''; $('session').hidden = true;
+  currentRoles = []; $('sourcePanel').replaceChildren(); $('sourcePanel').hidden = true;
   $('connection').hidden = false; $('identity').textContent = ''; $('caseList').replaceChildren();
   $('records').replaceChildren(); $('editor').replaceChildren(); message(t('noSession'));
 }
@@ -159,6 +160,7 @@ async function oidcMetadata() {
 async function connectIdentity(accessToken) {
   token = accessToken;
   const user = await json('/v1/admin/whoami'); $('identity').textContent = user.subject + ' · ' + user.roles.join(', ');
+  currentRoles = user.roles;
   $('connection').hidden = true; $('session').hidden = false; message(''); await loadCases();
 }
 async function beginSSO() {
@@ -251,6 +253,7 @@ async function start() {
   strings = await (await fetch('/assets/workspace-i18n.json')).json(); specification = await (await fetch('/openapi.json')).json(); translate();
   $('language').addEventListener('change', event => { locale = event.target.value; translate(); });
   $('disconnect').addEventListener('click', disconnect);
+  $('sourceDatasets').addEventListener('click', () => showSourcePanel().catch(showError));
   $('oidcLogin').addEventListener('click', () => beginSSO().catch(showError));
   $('newCase').addEventListener('click', () => { $('editor').replaceChildren(); buildForm(['newCase','Case','cases'], $('editor'), true); });
   $('connectForm').addEventListener('submit', async event => {
@@ -258,5 +261,73 @@ async function start() {
     try { await connectIdentity(token); } catch (error) { disconnect(); showError(error); }
   });
   await completeSSO();
+}
+
+async function showSourcePanel() {
+  const root = $('sourcePanel'); root.hidden = false; root.replaceChildren(element('h2', t('sourceDatasets')), element('p', t('sourceBoundary')));
+  const catalogue = await json('/v1/sources/catalog'), select = element('select');
+  select.setAttribute('aria-label', t('sourceDataset'));
+  for (const item of catalogue.records) { const option = element('option', item.provider + ' · ' + item.title); option.value = item.dataset; select.append(option); }
+  const controls = element('section'), stored = element('section'); root.append(select, controls, stored);
+  async function storedBatches(dataset, cursor) {
+    const data = await json('/v1/sources/batches?dataset=' + encodeURIComponent(dataset) + '&limit=10' + (cursor ? '&cursor=' + cursor : ''));
+    stored.replaceChildren(element('h3', t('storedBatches')));
+    for (const batch of data.records) {
+      const card = element('article', undefined, 'record'), coverage = batch.metadata.coverage;
+      card.append(element('h3', batch.dataset), element('p', new Date(batch.retrieved_at).toLocaleString()),
+        element('span', 'UNASSESSED', 'badge'), element('p', `${t('returnedRecords')}: ${coverage.returned_count} · ${t('moreAvailable')}: ${coverage.has_more ? t('yes') : t('no')}`));
+      const proof = element('details'), summary = element('summary', t('sourceProvenance'));
+      proof.append(summary, element('code', batch.content_sha256), element('p', batch.metadata.transport + ' · ' + coverage.limitations)); card.append(proof);
+      card.append(button(t('viewSourceRecords'), async () => { await showSourceRecords(batch.id, card); }));
+      card.append(button(t('admitSource'), async () => {
+        if (!current) throw new Error(t('chooseCase'));
+        const result = await write('/source-admissions', {evidence_id:batch.id}); await openCase(current.id);
+        message(t('admittedPending') + ' · ' + result.sha256);
+      })); stored.append(card);
+    }
+    if (!data.records.length) stored.append(element('p', t('empty'), 'empty'));
+    if (data.next_cursor) stored.append(button(t('nextPage'), () => storedBatches(dataset, data.next_cursor)));
+  }
+  async function showSourceRecords(id, card, cursor) {
+    card.querySelectorAll('.source-data').forEach(node => node.remove());
+    const data = await json(`/v1/sources/batches/${id}/records?limit=20` + (cursor ? '&cursor=' + cursor : ''));
+    const list = element('section', undefined, 'source-data');
+    for (const row of data.records) {
+      const body = row.body, fields = body.source_fields || {}, article = element('article', undefined, 'record');
+      article.append(element('h3', body.name || body.legal_name || body.symbol || fields.contract_market_name || fields.NAME || body.document_type || row.source_key));
+      const values = [body.period, body.unit, body.value, body.price_paid, body.document_amount, body.close].filter(value => value !== undefined && value !== null);
+      if (values.length) article.append(element('p', values.join(' · ')));
+      const detail = element('details'); detail.append(element('summary', t('sourceProvenance')), element('pre', JSON.stringify(body, null, 2), 'page-text'), element('code', row.source_locator + ' · ' + row.record_sha256));
+      article.append(detail); list.append(article);
+    }
+    if (data.next_cursor) list.append(button(t('nextPage'), () => showSourceRecords(id, card, data.next_cursor)));
+    card.append(list);
+  }
+  async function chooseDataset() {
+    const item = catalogue.records.find(row => row.dataset === select.value); controls.replaceChildren(); stored.replaceChildren();
+    const info = element('p', item.limitations), link = element('a', t('sourceDocumentation')); link.href = item.documentation; link.target = '_blank'; link.rel = 'noopener noreferrer'; controls.append(info, link);
+    if (!item.configured) controls.append(element('p', t('sourceAccessRequired'), 'badge warning'));
+    const form = element('form', undefined, 'fields'), inputs = [];
+    for (const [name, rules] of Object.entries(item.parameters)) {
+      const label = element('label'); label.append(element('span', fieldName(name))); let input;
+      if (rules.enum) { input = element('select'); for (const value of rules.enum) { const option = element('option', value); option.value = value; input.append(option); } }
+      else { input = element('input'); input.type = rules.type === 'date' ? 'date' : 'text'; }
+      input.value = rules.default; input.setAttribute('aria-label', fieldName(name)); label.append(input); form.append(label); inputs.push([name,input]);
+    }
+    const limitLabel = element('label', t('sourcePageLimit')), limitInput = element('input'); limitInput.type = 'number'; limitInput.min = '1'; limitInput.max = String(item.max_page_size); limitInput.value = '100'; limitInput.setAttribute('aria-label', t('sourcePageLimit')); limitLabel.append(limitInput); form.append(limitLabel);
+    const submit = element('button', t('importSource')); submit.disabled = !item.configured || !currentRoles.includes('ingestor'); form.append(submit);
+    if (!currentRoles.includes('ingestor')) form.append(element('p', t('ingestorRequired')));
+    let intent = null;
+    form.addEventListener('submit', async event => {
+      event.preventDefault(); submit.disabled = true;
+      try {
+        const body = {dataset:item.dataset,params:Object.fromEntries(inputs.map(([name,input]) => [name,input.value])),limit:Number(limitInput.value),page:1};
+        const signature = JSON.stringify(body); if (!intent || intent.signature !== signature) intent = {signature,key:crypto.randomUUID()};
+        const result = await json('/v1/sources/ingest', {method:'POST',headers:{'Content-Type':'application/json','Idempotency-Key':intent.key},body:signature});
+        intent = null; message(`${t('returnedRecords')}: ${result.returned_count} · ${t('moreAvailable')}: ${result.has_more ? t('yes') : t('no')}`); await storedBatches(item.dataset);
+      } catch (error) { showError(error); } finally { submit.disabled = false; }
+    }); controls.append(form); await storedBatches(item.dataset);
+  }
+  select.addEventListener('change', () => chooseDataset().catch(showError)); await chooseDataset();
 }
 start().catch(showError);

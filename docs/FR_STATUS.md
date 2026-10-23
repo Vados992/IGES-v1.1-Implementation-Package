@@ -31,7 +31,7 @@ they are never represented as actual independent people or counsel approvals.
 
 ## Cross-cutting acceptance
 
-- Schema v5: transactional fresh bootstrap, explicit administrator-only v2/v3/v4
+- Schema v6: transactional fresh bootstrap, explicit administrator-only v2/v3/v4/v5
   upgrade, repeat-safe migration and preserved original evidence/audit tested.
   Normal startup checks schema/project/role/RLS/grants and fails closed on drift.
 - Authorization: signed OIDC/MFA plus current case memberships/revocations; no
@@ -70,3 +70,10 @@ Full-scale latency, target corpus capacity, RPO/RTO, offsite recovery, independe
 penetration testing, real editorial acceptance and legal/privacy authority remain
 unverified. See [production gates](PRODUCTION_GATES.md), [security](SECURITY.md)
 and [implementation decisions](ADR_EVIDENCE_MVP.md).
+
+The subsequent [finance/property expansion](FINANCE_PROPERTY_SOURCES.md) adds
+20 profiles across 10 providers, preserving the original two adapters. This adds
+source records and source-to-case admission; it does not close FR-09's complete
+transaction workflow, FR-12's respondent delivery or FR-14's graph/timeline gaps.
+Current-head source tests and live CI supplement the historical baseline above;
+actual account data or independent human/legal acceptance are still not claimed.

@@ -62,7 +62,7 @@ jobs:
           docker compose exec -T db sh -c 'psql -U postgres -d iges -c "CREATE DATABASE iges_restore"'
           docker compose run --rm -v "$PWD/tests:/opt/iges/tests:ro" -v "$PWD/pyproject.toml:/opt/iges/pyproject.toml:ro" \
             -e IGES_TEST_ADMIN_URL="$(cat work/ci-admin-url)" \
-            --user root api sh -c 'pip install --no-cache-dir --target /tmp/testdeps pytest==9.1.1 && PYTHONPATH=/tmp/testdeps:/opt/iges python -m pytest -q -p no:cacheprovider -m integration tests/test_postgres_integration.py tests/test_migrations.py tests/test_workflow.py'
+            --user root api sh -c 'pip install --no-cache-dir --target /tmp/testdeps pytest==9.1.1 && PYTHONPATH=/tmp/testdeps:/opt/iges python -m pytest -q -p no:cacheprovider -m integration tests/test_postgres_integration.py tests/test_migrations.py tests/test_workflow.py tests/test_external_sources.py'
       - name: HTTP smoke and missing OIDC denial
         run: python scripts/http_smoke.py
       - name: Restart existing volume without repeating initialization
@@ -144,6 +144,36 @@ jobs:
       - name: Remove only this job's disposable volumes
         if: always()
         run: docker compose --profile intake down --volumes --remove-orphans
+  live-finance-property:
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install -r requirements.txt
+      - run: python scripts/ci_env.py
+      - name: Separate empty PostgreSQL and API
+        run: docker compose up --build --wait --wait-timeout 180
+      - name: Actual public bank, market-regulator and property sources without fallback
+        run: |
+          mkdir -p work/external-receipts
+          docker compose run --rm -v "$PWD/scripts:/opt/iges/scripts:ro" -v "$PWD/work/external-receipts:/receipts" \
+            --user "$(id -u):$(id -g)" -e CI=true api python -m scripts.live_external
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: official-finance-property-receipts
+          path: work/external-receipts
+          retention-days: 14
+      - name: Diagnostics
+        if: failure()
+        run: docker compose logs --tail 50
+      - name: Remove only this job's disposable services
+        if: always()
+        run: docker compose down --volumes --remove-orphans
   oidc-mfa:
     runs-on: ubuntu-latest
     timeout-minutes: 15
