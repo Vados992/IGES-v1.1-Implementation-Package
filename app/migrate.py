@@ -1,4 +1,4 @@
-"""Explicit administrator-only v2/v3/v4/v5 -> v6 migration; startup never migrates."""
+"""Explicit administrator-only v2 through v6 -> v7 migration; startup never migrates."""
 import argparse
 import json
 import os
@@ -6,7 +6,7 @@ from pathlib import Path
 
 from sqlalchemy import create_engine, text
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 MIGRATIONS = Path(__file__).resolve().parents[1] / 'db/migrations'
 
 
@@ -15,8 +15,8 @@ def upgrade(connection):
     version = connection.execute(text("SELECT version FROM schema_version")).scalar_one()
     if version == SCHEMA_VERSION:
         return False
-    if version not in (2, 3, 4, 5):
-        raise RuntimeError("Only a verified schema v2, v3, v4 or v5 database can be upgraded")
+    if version not in (2, 3, 4, 5, 6):
+        raise RuntimeError("Only a verified schema v2 through v6 database can be upgraded")
     if version == 2:
         connection.exec_driver_sql((MIGRATIONS / '003_award_provenance.sql').read_text(encoding='utf-8'),
                                    execution_options={'no_parameters': True})
@@ -26,7 +26,10 @@ def upgrade(connection):
     if version < 5:
         connection.exec_driver_sql((MIGRATIONS / '005_workspace_revisions.sql').read_text(encoding='utf-8'),
                                execution_options={'no_parameters': True})
-    connection.exec_driver_sql((MIGRATIONS / '006_external_sources.sql').read_text(encoding='utf-8'),
+    if version < 6:
+        connection.exec_driver_sql((MIGRATIONS / '006_external_sources.sql').read_text(encoding='utf-8'),
+                               execution_options={'no_parameters': True})
+    connection.exec_driver_sql((MIGRATIONS / '007_ukraine_public_sources.sql').read_text(encoding='utf-8'),
                                execution_options={'no_parameters': True})
     return True
 

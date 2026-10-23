@@ -274,4 +274,36 @@ for key, title, view in [
         view,
     )
 
+DATASETS.update(
+    {
+        "ua_rada_roster": Dataset(
+            "UA_RADA",
+            "Verkhovna Rada membership, VII–IX convocations",
+            "public_office",
+            "UA",
+            "https://data.rada.gov.ua/open/data/mps",
+            "Official published membership history, filtered to mandates overlapping 2014 onward. Convocation is not an annual snapshot. Source dates are preserved; null end dates are not proof of current office. No automatic cross-registry identity merge. Attribution: Апарат Верховної Ради України.",
+            {"term": {"enum": ["7", "8", "9"], "default": "9"}},
+        ),
+        "ua_rada_posts": Dataset(
+            "UA_RADA",
+            "Verkhovna Rada published posts and organizations",
+            "public_office",
+            "UA",
+            "https://data.rada.gov.ua/open/data/mps-skl9",
+            "Published posts and organizations by convocation with member identifiers, without post date ranges. VII includes 2012–2014 and cannot be restricted to 2014 posts from this file alone. No inferred annual office status or party affiliation. Attribution: Апарат Верховної Ради України.",
+            {"term": {"enum": ["7", "8", "9"], "default": "9"}},
+        ),
+        "ua_cec_elected_2020": Dataset(
+            "UA_CEC",
+            "CEC elected local deputies and heads, 2020 election cycle",
+            "public_office",
+            "UA",
+            "https://www.cvk.gov.ua/pls/vm2020/pvm013pt001f01=695.html",
+            "Election-result records including published repeat/by-elections, not current office holders. Structural source keys identify rows, not people. Birth dates, residential places, education and personal party membership are excluded from normalized records. Original archive is restricted to counsel; attribution: Центральна виборча комісія України.",
+            {},
+        ),
+    }
+)
+
 PROVIDERS = frozenset(d.provider for d in DATASETS.values())

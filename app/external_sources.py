@@ -23,6 +23,12 @@ MAX_RECORDS = 20_000
 ADAPTER_VERSION = "iges-public-sources/1"
 
 
+def response_bound(dataset):
+    # Large official election archive has its own fixed-endpoint bound; other adapters retain 2 MB.
+    provider = DATASETS[dataset].provider
+    return 32_000_000 if provider == "UA_CEC" else 8_000_000 if provider == "UA_RADA" else MAX_BYTES
+
+
 def canonical(value):
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False)
 
@@ -120,6 +126,8 @@ def validate_query(dataset, params, page=1, limit=100, adapter_version=None):
             raise ValueError("INVALID_MARKET_SYMBOLS")
     if dataset.startswith(("ecb_", "boe_", "eurostat_")) and page != 1:
         raise ValueError("DATASET_NOT_PAGED")
+    if spec.provider.startswith("UA_") and page != 1:
+        raise ValueError("DATASET_NOT_PAGED")
     return {
         "dataset": dataset,
         "params": query,
@@ -132,6 +140,12 @@ def validate_query(dataset, params, page=1, limit=100, adapter_version=None):
 def request_for(query):
     dataset, q, page, limit = (query[k] for k in ["dataset", "params", "page", "limit"])
     spec = DATASETS[dataset]
+    if spec.provider == "UA_RADA":
+        term = q["term"]
+        name = f"mps0{term}-data.json" if dataset == "ua_rada_roster" else "mp-posts_full.csv"
+        return f"https://data.rada.gov.ua/ogd/mps/skl{term}/{name}", {}
+    if spec.provider == "UA_CEC":
+        return "https://www.cvk.gov.ua/pls/vm2020/opendata_obr.xml", {}
     if spec.provider == "FDIC":
         fields = {
             "institutions": "CERT,NAME,STALP,ACTIVE,ASSET,DEP,DATEUPDT",
@@ -280,6 +294,10 @@ class ExternalSnapshot:
     @property
     def media_type(self):
         provider = DATASETS[self.query["dataset"]].provider
+        if provider == "UA_CEC":
+            return "application/xml"
+        if self.query["dataset"] == "ua_rada_posts":
+            return "text/csv"
         return (
             "text/csv"
             if provider in {"ECB", "BOE"}
@@ -307,7 +325,7 @@ def parse_external(raw, query, url, transport="HTTPS"):
         raise ValueError("SOURCE_ADAPTER_VERSION_MISMATCH")
     endpoint, params = request_for(query)
     expected_url = str(httpx.URL(endpoint, params=params))
-    if url != expected_url or len(raw) > MAX_BYTES:
+    if url != expected_url or len(raw) > response_bound(query["dataset"]):
         raise ValueError("SOURCE_URL_OR_SIZE_MISMATCH")
     spec = DATASETS[query["dataset"]]
     records = []
@@ -326,10 +344,24 @@ def parse_external(raw, query, url, transport="HTTPS"):
             raise ValueError("DUPLICATE_OR_INVALID_SOURCE_KEY")
         seen.add(key)
         records.append({"key": key, "body": plain(body), "locator": locator})
-        if len(records) > MAX_RECORDS:
+        if len(records) > (50_000 if spec.provider == "UA_CEC" else MAX_RECORDS):
             raise ValueError("SOURCE_RECORD_LIMIT")
 
-    if spec.provider in {"ECB", "BOE"}:
+    if spec.provider.startswith("UA_"):
+        from app.ukraine_sources import parse_cec, parse_posts, parse_roster
+
+        parser = (
+            parse_cec
+            if spec.provider == "UA_CEC"
+            else parse_roster
+            if query["dataset"] == "ua_rada_roster"
+            else parse_posts
+        )
+        details = parser(raw, add) if spec.provider == "UA_CEC" else parser(raw, query["params"]["term"], add)
+        coverage.update(details)
+        coverage["archive_complete"] = True
+        coverage["universe_complete"] = False
+    elif spec.provider in {"ECB", "BOE"}:
         csv.field_size_limit(MAX_BYTES)
         reader = csv.DictReader(io.StringIO(raw.decode("utf-8-sig"), newline=""))
         required = (
@@ -686,7 +718,10 @@ def parse_external(raw, query, url, transport="HTTPS"):
                 raise ValueError("CONNECTOR_COUNT_MISMATCH")
         else:
             raise ValueError("UNKNOWN_DATASET")
-    if spec.provider not in {"EUROSTAT", "ECB", "BOE", "ALPACA"} and len(records) > query["limit"]:
+    if (
+        spec.provider not in {"EUROSTAT", "ECB", "BOE", "ALPACA", "UA_RADA", "UA_CEC"}
+        and len(records) > query["limit"]
+    ):
         raise ValueError("SOURCE_EXCEEDED_PAGE_LIMIT")
     coverage["returned_count"] = len(records)
     coverage["missing_observations"] = sum(
@@ -699,6 +734,19 @@ def parse_external(raw, query, url, transport="HTTPS"):
 
 
 async def fetch_external(dataset, params, page=1, limit=100):
+    # Bounded retries of the same public GET only, for intermittent Rada TLS/transport failures.
+    # HTTP denials, invalid payloads and other providers are never replaced or silently skipped.
+    attempts = 3 if DATASETS.get(dataset) and DATASETS[dataset].provider == "UA_RADA" else 1
+    for attempt in range(attempts):
+        try:
+            return await _fetch_external_once(dataset, params, page, limit)
+        except httpx.TransportError:
+            if attempt + 1 == attempts:
+                raise
+            await asyncio.sleep(10 * (attempt + 1))
+
+
+async def _fetch_external_once(dataset, params, page=1, limit=100):
     query = validate_query(dataset, params, page, limit)
     url, arguments = request_for(query)
     expected = str(httpx.URL(url, params=arguments))
@@ -723,14 +771,16 @@ async def fetch_external(dataset, params, page=1, limit=100):
                 mime = response.headers.get("content-type", "").split(";")[0].strip().lower()
                 allowed = (
                     {"text/csv", "application/csv"}
-                    if DATASETS[dataset].provider in {"BOE", "ECB"}
+                    if DATASETS[dataset].provider in {"BOE", "ECB"} or dataset == "ua_rada_posts"
+                    else {"application/xml", "text/xml"}
+                    if DATASETS[dataset].provider == "UA_CEC"
                     else {"application/json", "application/vnd.api+json", "application/sparql-results+json"}
                 )
                 if mime not in allowed:
                     raise ValueError("UNEXPECTED_SOURCE_MEDIA_TYPE")
                 content = bytearray()
                 async for chunk in response.aiter_raw():
-                    if len(content) + len(chunk) > MAX_BYTES:
+                    if len(content) + len(chunk) > response_bound(dataset):
                         raise ValueError("SOURCE_RESPONSE_TOO_LARGE")
                     content.extend(chunk)
     return parse_external(bytes(content), query, expected)

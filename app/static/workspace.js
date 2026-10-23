@@ -265,6 +265,7 @@ async function start() {
 
 async function showSourcePanel() {
   const root = $('sourcePanel'); root.hidden = false; root.replaceChildren(element('h2', t('sourceDatasets')), element('p', t('sourceBoundary')));
+  root.append(button(t('ukraineSearch'), () => showUkrainePanel().catch(showError)));
   const catalogue = await json('/v1/sources/catalog'), select = element('select');
   select.setAttribute('aria-label', t('sourceDataset'));
   for (const item of catalogue.records) { const option = element('option', item.provider + ' · ' + item.title); option.value = item.dataset; select.append(option); }
@@ -279,11 +280,13 @@ async function showSourcePanel() {
       const proof = element('details'), summary = element('summary', t('sourceProvenance'));
       proof.append(summary, element('code', batch.content_sha256), element('p', batch.metadata.transport + ' · ' + coverage.limitations)); card.append(proof);
       card.append(button(t('viewSourceRecords'), async () => { await showSourceRecords(batch.id, card); }));
-      card.append(button(t('admitSource'), async () => {
+      const admit = button(t('admitSource'), async () => {
         if (!current) throw new Error(t('chooseCase'));
         const result = await write('/source-admissions', {evidence_id:batch.id}); await openCase(current.id);
         message(t('admittedPending') + ' · ' + result.sha256);
-      })); stored.append(card);
+      });
+      admit.disabled = dataset.startsWith('ua_') || !currentRoles.some(role => ['analyst','editor'].includes(role));
+      card.append(admit); if (dataset.startsWith('ua_')) card.append(element('p', t('ukraineOriginalBlocked'))); stored.append(card);
     }
     if (!data.records.length) stored.append(element('p', t('empty'), 'empty'));
     if (data.next_cursor) stored.append(button(t('nextPage'), () => storedBatches(dataset, data.next_cursor)));
@@ -314,7 +317,8 @@ async function showSourcePanel() {
       else { input = element('input'); input.type = rules.type === 'date' ? 'date' : 'text'; }
       input.value = rules.default; input.setAttribute('aria-label', fieldName(name)); label.append(input); form.append(label); inputs.push([name,input]);
     }
-    const limitLabel = element('label', t('sourcePageLimit')), limitInput = element('input'); limitInput.type = 'number'; limitInput.min = '1'; limitInput.max = String(item.max_page_size); limitInput.value = '100'; limitInput.setAttribute('aria-label', t('sourcePageLimit')); limitLabel.append(limitInput); form.append(limitLabel);
+    const limitLabel = element('label', t('sourcePageLimit')), limitInput = element('input'); limitInput.type = 'number'; limitInput.min = '1'; limitInput.max = String(item.max_page_size); limitInput.value = '100'; limitInput.setAttribute('aria-label', t('sourcePageLimit')); limitLabel.append(limitInput);
+    if (item.whole_archive) form.append(element('p', t('ukraineWholeArchive'))); else form.append(limitLabel);
     const submit = element('button', t('importSource')); submit.disabled = !item.configured || !currentRoles.includes('ingestor'); form.append(submit);
     if (!currentRoles.includes('ingestor')) form.append(element('p', t('ingestorRequired')));
     let intent = null;
@@ -329,5 +333,32 @@ async function showSourcePanel() {
     }); controls.append(form); await storedBatches(item.dataset);
   }
   select.addEventListener('change', () => chooseDataset().catch(showError)); await chooseDataset();
+}
+async function showUkrainePanel() {
+  const root = $('sourcePanel'); root.hidden = false; root.replaceChildren(element('h2', t('ukraineSearch')), element('p', t('ukraineBoundary')));
+  const coverage = await json('/v1/sources/ukraine/coverage');
+  const proof = element('details'); proof.append(element('summary', t('ukraineCoverage')),
+    element('pre', JSON.stringify(coverage, null, 2), 'page-text')); root.append(proof);
+  for (const count of coverage.record_counts) root.append(element('p', `${t(count.dataset)}${count.convocation ? ' · ' + count.convocation : ''}: ${count.snapshot_records}`));
+  const form = element('form'), input = element('input'), submit = element('button', t('ukraineFind'));
+  input.type = 'search'; input.minLength = 3; input.maxLength = 100; input.required = true; input.setAttribute('aria-label', t('ukraineName'));
+  const label = element('label', t('ukraineName')); label.append(input); form.append(label, submit); root.append(form);
+  const results = element('section'); root.append(results);
+  async function find(cursor) {
+    const data = await json('/v1/sources/ukraine/search?q=' + encodeURIComponent(input.value.trim()) + (cursor ? '&cursor=' + cursor : ''));
+    results.replaceChildren();
+    for (const row of data.records) {
+      const card = element('article', undefined, 'record'), body = row.body;
+      card.append(element('h3', body.name), element('span', 'UNASSESSED', 'badge'),
+        element('p', [body.office,body.organization,body.council,body.convocation,body.mandate_start,body.mandate_end,body.election_decision_date].filter(Boolean).join(' · ')),
+        element('p', t('ukraineHistorical')));
+      const detail = element('details'); detail.append(element('summary', t('sourceProvenance')), element('p', row.dataset),
+        element('pre', JSON.stringify(body, null, 2), 'page-text'), element('code', row.evidence_id + ' · ' + row.source_locator + ' · ' + row.record_sha256));
+      card.append(detail); results.append(card);
+    }
+    if (!data.records.length) results.append(element('p', t('empty')));
+    if (data.next_cursor) results.append(button(t('nextPage'), () => find(data.next_cursor).catch(showError)));
+  }
+  form.addEventListener('submit', async event => { event.preventDefault(); submit.disabled = true; try { await find(); } catch (error) { showError(error); } finally { submit.disabled = false; } });
 }
 start().catch(showError);
